@@ -8,12 +8,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ApexDevelopment/Omni.git"
+    "url": "git+https://github.com/Skid-Team-6/Omni.git"
   },
   "author": "",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/ApexDevelopment/Omni/issues"
+    "url": "https://github.com/Skid-Team-6/Omni/issues"
   },
-  "homepage": "https://github.com/ApexDevelopment/Omni#readme"
+  "homepage": "https://github.com/Skid-Team-6/Omni#readme"
 }

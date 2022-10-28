@@ -135,4 +135,4 @@ function logout_user(id) {
 	emit("user_offline", user_database[id]);
 }
 
-module.exports = { on, off, send_message, create_channel, create_user, login_user };
+module.exports = { on, off, send_message, create_channel, create_user, login_user, logout_user };

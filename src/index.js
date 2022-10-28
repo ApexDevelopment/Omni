@@ -126,4 +126,13 @@ function login_user(id) {
 	emit("user_online", user_database[id]);
 }
 
+function logout_user(id) {
+	if (!user_database[id]) {
+		return;
+	}
+
+	delete online_users[id];
+	emit("user_offline", user_database[id]);
+}
+
 module.exports = { on, off, send_message, create_channel, create_user, login_user };

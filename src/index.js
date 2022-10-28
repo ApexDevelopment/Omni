@@ -35,6 +35,7 @@ class User {
 class Message {
 	constructor(id, channel_id, user_id, content) {
 		this.id = id;
+		this.channel_id = channel_id;
 		this.user_id = user_id;
 		this.content = content;
 	}
@@ -92,7 +93,7 @@ function send_message(user_id, channel_id, content) {
 		return;
 	}
 
-	let message = new Message(uuidv4(), user_id, content);
+	let message = new Message(uuidv4(), channel_id, user_id, content);
 	message_database[channel_id].push(message);
 	emit("message", message);
 	return message.id;
@@ -107,7 +108,7 @@ function create_channel(name) {
 }
 
 function create_user(username) {
-	if (user_database[username]) {
+	if (find_user_by_username(username)) {
 		return;
 	}
 
@@ -116,14 +117,13 @@ function create_user(username) {
 	return id;
 }
 
-function login_user(username) {
-	if (!user_database[username]) {
+function login_user(id) {
+	if (!user_database[id]) {
 		return;
 	}
 
-	const user = find_user_by_username(username);
-	online_users[user.id] = true;
-	emit("user_online", { user: user });
+	online_users[id] = true;
+	emit("user_online", user_database[id]);
 }
 
 module.exports = { on, off, send_message, create_channel, create_user, login_user };

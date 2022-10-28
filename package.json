@@ -15,5 +15,8 @@
   "bugs": {
     "url": "https://github.com/Skid-Team-6/Omni/issues"
   },
-  "homepage": "https://github.com/Skid-Team-6/Omni#readme"
+  "homepage": "https://github.com/Skid-Team-6/Omni#readme",
+  "dependencies": {
+    "uuid": "^9.0.0"
+  }
 }

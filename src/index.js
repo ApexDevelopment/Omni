@@ -102,7 +102,7 @@ function create_channel(name) {
 	let channel = new Channel(name, uuidv4());
 	channels[channel.id] = channel;
 	message_database[channel.id] = [];
-	emit("channel", channel);
+	emit("channel_create", channel);
 	return channel.id;
 }
 
@@ -123,7 +123,7 @@ function login_user(username) {
 
 	const user = find_user_by_username(username);
 	online_users[user.id] = true;
-	emit("login", { user: user });
+	emit("user_online", { user: user });
 }
 
 module.exports = { on, off, send_message, create_channel, create_user, login_user };

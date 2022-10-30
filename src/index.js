@@ -43,6 +43,7 @@ class Message {
 		this.channel_id = channel_id;
 		this.user_id = user_id;
 		this.content = content;
+		this.timestamp = Date.now();
 	}
 }
 
@@ -234,9 +235,24 @@ function delete_message(id) {
 	}
 }
 
+function get_messages(channel_id, timestamp, limit = 50) {
+	if (!channels[channel_id]) {
+		return;
+	}
+
+	if (!message_database[channel_id]) {
+		return;
+	}
+
+	// TODO: Maybe find a better way to organize the data so we don't have to do this
+	return message_database[channel_id].filter((message) => {
+		return message.timestamp <= timestamp;
+	}).slice(-limit);
+}
+
 module.exports = {
 	on, off,
-	send_message, delete_message,
+	send_message, get_messages, delete_message,
 	create_channel, delete_channel,
 	create_user, get_user, delete_user,
 	login_user, logout_user,

@@ -4,7 +4,7 @@
   "description": "A distributed messaging system",
   "main": "src/index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jest"
   },
   "repository": {
     "type": "git",
@@ -18,5 +18,8 @@
   "homepage": "https://github.com/Skid-Team-6/Omni#readme",
   "dependencies": {
     "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "jest": "^29.3.0"
   }
 }

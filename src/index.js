@@ -87,7 +87,7 @@ function find_user_by_username(username) {
 		q
 			.findRecords("user")
 			.filter({ attribute: "username", value: username })
-			.limit(1)
+			.page({offset: 0, limit: 1})
 	);
 
 	if (user.length == 0) {
@@ -143,7 +143,9 @@ function create_user(username, admin = false) {
 		}
 	};
 
-	memory.update((t) => t.addRecord(user));
+	memory.update((t) => t.addRecord(user)).catch((e) => {
+		console.log(e);
+	});
 	return id;
 }
 
@@ -325,7 +327,7 @@ function get_messages(channel_id, timestamp, limit = 50) {
 			.filter({ attribute: "channel", value: channel_id })
 			.filter((record) => record.attributes.timestamp <= timestamp)
 			.sortBy("timestamp")
-			.limit(limit)
+			.page({offset: 0, limit})
 	);
 }
 

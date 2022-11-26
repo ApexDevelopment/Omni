@@ -1,3 +1,4 @@
+const fs = require("fs");
 const { v4: uuidv4 } = require("uuid");
 const { MemorySource } = require("@orbit/memory");
 //const { JSONAPISource } = require("@orbit/jsonapi");
@@ -62,10 +63,10 @@ class EventHandler {
 
 function load_server_or_make_default(id, name) {
 	this_server = memory.cache.query((q) => q.findRecord({ type: "peer", id }));
-	if (this_server == null) {
+	if (!this_server) {
 		this_server = {
 			type: "peer",
-			id: id,
+			id,
 			attributes: {
 				name,
 				address: "localhost",
@@ -77,6 +78,8 @@ function load_server_or_make_default(id, name) {
 			}
 		}
 	}
+
+	memory.update((t) => t.addRecord(this_server));
 }
 
 function find_user_by_username(username) {
@@ -328,7 +331,7 @@ function get_messages(channel_id, timestamp, limit = 50) {
 
 function start(config_path) {
 	config = JSON.parse(fs.readFileSync(config_path, "utf8"));
-	this_server = load_server_or_make_default(config.server_id, config.server_name);
+	load_server_or_make_default(config.server_id, config.server_name);
 }
 
 module.exports = {

@@ -9,8 +9,8 @@ module.exports = new RecordSchema({
 				port: { type: "number" }
 			},
 			relationships: {
-				channels: { type: "hasMany", model: "channel", inverse: "peers" },
-				users: { type: "hasMany", model: "user", inverse: "peers" }
+				channels: { kind: "hasMany", type: "channel", inverse: "peer" },
+				users: { kind: "hasMany", type: "user", inverse: "peer" }
 			}
 		},
 		user: {
@@ -20,7 +20,7 @@ module.exports = new RecordSchema({
 				//local: { type: "boolean" }
 			},
 			relationships: {
-				peer: { type: "hasOne", model: "peer", inverse: "users" }
+				peer: { kind: "hasOne", type: "peer", inverse: "users" }
 			}
 		},
 		channel: {
@@ -30,8 +30,8 @@ module.exports = new RecordSchema({
 				is_private: { type: "boolean" }
 			},
 			relationships: {
-				messages: { type: "hasMany", model: "message", inverse: "channel" },
-				peer: { type: "hasOne", model: "peer", inverse: "channels" }
+				messages: { kind: "hasMany", type: "message", inverse: "channel" },
+				peer: { kind: "hasOne", type: "peer", inverse: "channels" }
 			}
 		},
 		message: {
@@ -40,8 +40,8 @@ module.exports = new RecordSchema({
 				timestamp: { type: "number" }
 			},
 			relationships: {
-				channel: { type: "hasOne", model: "channel", inverse: "messages" },
-				user: { type: "hasOne", model: "user", inverse: "messages" }
+				channel: { kind: "hasOne", type: "channel", inverse: "messages" },
+				user: { kind: "hasOne", type: "user" }
 			}
 		}
 	}

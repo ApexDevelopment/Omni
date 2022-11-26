@@ -17,6 +17,8 @@
   },
   "homepage": "https://github.com/Skid-Team-6/Omni#readme",
   "dependencies": {
+    "@orbit/memory": "^0.17.2",
+    "@orbit/records": "^0.17.0",
     "uuid": "^9.0.0"
   },
   "devDependencies": {

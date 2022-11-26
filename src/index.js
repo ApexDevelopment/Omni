@@ -245,20 +245,21 @@ function get_channel(id) {
 	return memory.cache.query((q) => q.findRecord({ type: "channel", id }));
 }
 
-function create_channel(name) {
+function create_channel(name, admin_only = false, is_private = false) {
 	let channel = {
 		type: "channel",
 		id: uuidv4(),
 		attributes: {
-			name: name,
-			admin_only: false,
-			is_private: false
+			name,
+			admin_only,
+			is_private
 		},
 		relationships: {
 			peer: { data: { type: "peer", id: this_server.id } }
 		}
 	}
 
+	memory.update((t) => t.addRecord(channel));
 	emit("channel_create", channel);
 	return channel.id;
 }
@@ -302,7 +303,6 @@ function send_message(user_id, channel_id, content) {
 	};
 
 	memory.update((t) => t.addRecord(message));
-
 	emit("message", message);
 	return message.id;
 }
@@ -323,10 +323,9 @@ function get_messages(channel_id, timestamp, limit = 50) {
 		q
 			.findRecords("message")
 			.filter({ attribute: "channel", value: channel_id })
-			.filter((record) => record.attributes.timestamp <= timestamp)
-			.sortBy("timestamp")
+			.filter({ attribute: "timestamp", value: timestamp, op: "<=" })
 			.page({offset: 0, limit})
-	);
+	).sort((a, b) => a.attributes.timestamp - b.attributes.timestamp);
 }
 
 function start(config_path) {

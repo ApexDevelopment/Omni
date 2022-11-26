@@ -143,9 +143,7 @@ function create_user(username, admin = false) {
 		}
 	};
 
-	memory.update((t) => t.addRecord(user)).catch((e) => {
-		console.log(e);
-	});
+	memory.update((t) => t.addRecord(user));
 	return id;
 }
 

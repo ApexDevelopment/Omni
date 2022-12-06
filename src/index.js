@@ -92,7 +92,7 @@ function emit(event, data) {
 	});
 }
 
-function create_user(username, admin = false, peer_id = null) {
+async function create_user(username, admin = false, peer_id = null) {
 	if (find_user_by_username(username) != null) {
 		return null;
 	}
@@ -112,12 +112,13 @@ function create_user(username, admin = false, peer_id = null) {
 		}
 	};
 
-	memory.update((t) => t.addRecord(user));
+	await memory.update((t) => t.addRecord(user));
+	emit("user_create", user);
 	return id;
 }
 
-function delete_user(id) {
-	memory.update((t) => t.removeRecord({ type: "user", id }));
+async function delete_user(id) {
+	await memory.update((t) => t.removeRecord({ type: "user", id }));
 }
 
 function get_user(id) {
@@ -206,15 +207,15 @@ function get_online_remote_users(channel_id) {
 	});
 }
 
-function get_all_channels() {
-	return memory.cache.query((q) => q.findRecords("channel"));
+async function get_all_channels() {
+	return await memory.query((q) => q.findRecords("channel"));
 }
 
-function get_channel(id) {
-	return memory.cache.query((q) => q.findRecord({ type: "channel", id }));
+async function get_channel(id) {
+	return await memory.query((q) => q.findRecord({ type: "channel", id }));
 }
 
-function create_channel(name, admin_only = false, is_private = false) {
+async function create_channel(name, admin_only = false, is_private = false) {
 	let channel = {
 		type: "channel",
 		id: uuidv4(),
@@ -228,12 +229,12 @@ function create_channel(name, admin_only = false, is_private = false) {
 		}
 	}
 
-	memory.update((t) => t.addRecord(channel));
+	await memory.update((t) => t.addRecord(channel));
 	emit("channel_create", channel);
 	return channel.id;
 }
 
-function create_remote_channel(name, channel_id, peer_id) {
+async function create_remote_channel(name, channel_id, peer_id) {
 	let channel = {
 		type: "channel",
 		id: channel_id,
@@ -245,22 +246,22 @@ function create_remote_channel(name, channel_id, peer_id) {
 		}
 	}
 
-	memory.update((t) => t.addRecord(channel));
+	await memory.update((t) => t.addRecord(channel));
 	emit("channel_create", channel);
 	return channel.id;
 }
 
-function delete_channel(id) {
+async function delete_channel(id) {
 	let channel = get_channel(id);
 
 	if (!channel) {
 		return false;
 	}
 
-	memory.update((t) => t.removeRecord({ type: "channel", id }));
+	await memory.update((t) => t.removeRecord({ type: "channel", id }));
 
 	// Also delete all associated messages
-	memory.update((t) =>
+	await memory.update((t) =>
 		t.removeRecords("message").filter({ attribute: "channel", value: id })
 	);
 
@@ -268,8 +269,8 @@ function delete_channel(id) {
 	return true;
 }
 
-function send_message(user_id, channel_id, content) {
-	let channel = get_channel(channel_id);
+async function send_message(user_id, channel_id, content) {
+	let channel = await get_channel(channel_id);
 
 	if (!channel || !online_users[user_id]) {
 		return null;
@@ -288,30 +289,30 @@ function send_message(user_id, channel_id, content) {
 		}
 	};
 
-	memory.update((t) => t.addRecord(message));
+	await memory.update((t) => t.addRecord(message));
 	emit("message", message);
 	return message.id;
 }
 
-function delete_message(id) {
-	memory.update((t) => t.removeRecord({ type: "message", id }));
+async function delete_message(id) {
+	await memory.update((t) => t.removeRecord({ type: "message", id }));
 	emit("message_delete", id);
 }
 
-function get_messages(channel_id, timestamp, limit = 50) {
-	let channel = get_channel(channel_id);
+async function get_messages(channel_id, timestamp, limit = 50) {
+	let channel = await get_channel(channel_id);
 
 	if (!channel) {
 		return null;
 	}
 
-	return memory.cache.query((q) =>
+	return (await memory.query((q) =>
 		q
 			.findRecords("message")
 			.filter({ attribute: "channel", value: channel_id })
 			.filter({ attribute: "timestamp", value: timestamp, op: "<=" })
 			.page({offset: 0, limit})
-	).sort((a, b) => a.attributes.timestamp - b.attributes.timestamp);
+	)).sort((a, b) => a.attributes.timestamp - b.attributes.timestamp);
 }
 
 function peer_online(peer_id) {
@@ -325,7 +326,7 @@ function peer_online(peer_id) {
 }
 
 function set_up_handlers(websocket, peer_id) {
-	websocket.on("message", (message) => {
+	websocket.on("message", async (message) => {
 		let data = JSON.parse(message);
 
 		switch (data.type) {
@@ -367,7 +368,7 @@ function set_up_handlers(websocket, peer_id) {
 				break;
 			case "delete_user":
 				// This should be fine?
-				if (delete_user(data.id)) {
+				if (await delete_user(data.id)) {
 					websocket.send(JSON.stringify({
 						type: "delete_user_success",
 						id: data.id
@@ -380,14 +381,14 @@ function set_up_handlers(websocket, peer_id) {
 				}
 				break;
 			case "create_channel":
-				let new_channel_id = create_remote_channel(data.name, data.id, peer_id);
+				let new_channel_id = await create_remote_channel(data.name, data.id, peer_id);
 				websocket.send(JSON.stringify({
 					type: "create_channel_success",
 					id: new_channel_id
 				}));
 				break;
 			case "delete_channel":
-				if (delete_channel(data.id)) {
+				if (await delete_channel(data.id)) {
 					websocket.send(JSON.stringify({
 						type: "delete_channel_success",
 						id: data.id
@@ -400,14 +401,14 @@ function set_up_handlers(websocket, peer_id) {
 				}
 				break;
 			case "send_message":
-				let new_message_id = send_message(data.user_id, data.channel_id, data.content);
+				let new_message_id = await send_message(data.user_id, data.channel_id, data.content);
 				websocket.send(JSON.stringify({
 					type: "send_message_success",
 					id: new_message_id
 				}));
 				break;
 			case "delete_message":
-				if (delete_message(data.id)) {
+				if (await delete_message(data.id)) {
 					websocket.send(JSON.stringify({
 						type: "delete_message_success",
 						id: data.id
@@ -420,7 +421,7 @@ function set_up_handlers(websocket, peer_id) {
 				}
 				break;
 			case "get_messages":
-				let messages = get_messages(data.channel_id, data.timestamp, data.limit);
+				let messages = await get_messages(data.channel_id, data.timestamp, data.limit);
 				websocket.send(JSON.stringify({
 					type: "get_messages_success",
 					messages: messages
@@ -517,10 +518,10 @@ function await_handshake(socket) {
 function start(config_path) {
 	config = JSON.parse(fs.readFileSync(config_path, "utf8"));
 	load_server_or_make_default(config.server_id, config.server_name);
-	wss = new WebSocket.Server({ port: config.port, noServer: true });
+	wss = new WebSocketServer({ port: config.port, noServer: true });
 
 	wss.on("connection", (ws, req) => {
-		console.log(`New connection from ${req.connection.remoteAddress}`);
+		console.log(`New connection from ${req.socket.remoteAddress}`);
 		await_handshake(ws).then((data) => {
 			console.log(`Handshake from ${data.id}`);
 			peer_online(data.id);
@@ -536,10 +537,12 @@ function start(config_path) {
 	});
 
 	// Connect to all peers in Orbit database
-	memory.cache.query((q) => q.findRecords("peer")).forEach((peer) => {
-		if (peer.id != this_server.id) {
-			connect_to_peer(peer);
-		}
+	memory.query((q) => q.findRecords("peer")).then((peers) => {
+		peers.forEach((peer) => {
+			if (peer.id != this_server.id) {
+				connect_to_peer(peer);
+			}
+		});
 	});
 }
 
@@ -552,5 +555,6 @@ module.exports = {
 	login_user, logout_user,
 	get_all_channels, get_channel,
 	get_all_online_users, get_all_online_local_users, get_all_online_remote_users,
-	get_online_users, get_online_local_users, get_online_remote_users
+	get_online_users, get_online_local_users, get_online_remote_users,
+	send_pair_request
 };

@@ -464,11 +464,10 @@ function send_pair_request(ip, port) {
 					}
 				}
 
-				// Update orbit db
 				memory.update((t) => {
 					t.addRecord(peer);
 				});
-				
+
 				break;
 			case "pair_reject":
 				console.log(`Pairing rejected by ${ip}:${port}`);

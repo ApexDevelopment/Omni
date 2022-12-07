@@ -48,17 +48,17 @@ function load_server_or_make_default(id, name) {
 }
 
 function find_user_by_username(username) {
-	let user = database.cache.query((q) =>
+	let users = database.cache.query((q) =>
 		q
 			.findRecords("user")
 			.filter({ attribute: "username", value: username })
 			.page({offset: 0, limit: 1})
 	);
 
-	if (user.length == 0) {
-		return null;
+	if (users && users.length > 0) {
+		return users[0];
 	} else {
-		return user[0];
+		return null;
 	}
 }
 
@@ -241,7 +241,21 @@ async function get_channel(id) {
 	return await database.query((q) => q.findRecord({ type: "channel", id }));
 }
 
+async function find_channel_by_name(name) {
+	let channels = await database.query((q) => q.findRecords("channel").filter({ attribute: "name", value: name }));
+	if (channels && channels.length > 0) {
+		return channels[0];
+	}
+	else {
+		return null;
+	}
+}
+
 async function create_channel(name, admin_only = false, is_private = false) {
+	if (await find_channel_by_name(name)) {
+		return null;
+	}
+
 	let channel = {
 		type: "channel",
 		id: uuidv4(),
@@ -579,8 +593,15 @@ function start(config_path) {
 	});
 }
 
+function stop() {
+	if (wss != null) {
+		wss.close();
+		wss = null;
+	}
+}
+
 module.exports = {
-	start,
+	start, stop,
 	on, off,
 	send_message, get_messages, delete_message,
 	create_channel, delete_channel,

@@ -302,13 +302,12 @@ async function delete_channel(id) {
 		return false;
 	}
 
-	await database.update((t) => t.removeRecord({ type: "channel", id }));
-
 	// Also delete all associated messages
-	await database.update((t) =>
-		// FIXME
-		{}//t.removeRecords("message").filter({ attribute: "channel", value: id })
-	);
+	/*await database.update((t) =>
+		t.removeFromRelatedRecords({ type: "channel", id }, "messages", { type: "message", id: null })
+	);*/
+
+	await database.update((t) => t.removeRecord({ type: "channel", id }));
 
 	emit("channel_delete", id);
 	return true;

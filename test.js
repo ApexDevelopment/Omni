@@ -1,59 +1,65 @@
-const omni = require("./src/index.js");
+const Omni = require("./src/index.js");
+const omni_server = Omni.create();
 
-test("Omni exports properly", () => {
-	expect(omni).toBeDefined();
-	expect(omni.start).toBeDefined();
-	expect(omni.stop).toBeDefined();
-	expect(omni.on).toBeDefined();
-	expect(omni.off).toBeDefined();
-	expect(omni.create_channel).toBeDefined();
-	expect(omni.create_user).toBeDefined();
-	expect(omni.delete_channel).toBeDefined();
-	expect(omni.delete_message).toBeDefined();
-	expect(omni.delete_user).toBeDefined();
-	expect(omni.get_all_channels).toBeDefined();
-	expect(omni.get_all_online_local_users).toBeDefined();
-	expect(omni.get_all_online_remote_users).toBeDefined();
-	expect(omni.get_all_online_users).toBeDefined();
-	expect(omni.get_channel).toBeDefined();
-	expect(omni.get_messages).toBeDefined();
-	expect(omni.get_online_local_users).toBeDefined();
-	expect(omni.get_online_remote_users).toBeDefined();
-	expect(omni.get_online_users).toBeDefined();
-	expect(omni.get_online_users).toBeDefined();
-	expect(omni.get_user).toBeDefined();
-	expect(omni.login_user).toBeDefined();
-	expect(omni.logout_user).toBeDefined();
-	expect(omni.send_message).toBeDefined();
-	expect(omni.send_pair_request).toBeDefined();
+test("Omni exports properly", () =>{
+	expect(Omni).toBeDefined();
+	expect(Omni.create).toBeDefined();
+});
+
+test("Omni creates server properly", () => {
+	expect(omni_server).toBeDefined();
+	expect(omni_server.start).toBeDefined();
+	expect(omni_server.stop).toBeDefined();
+	expect(omni_server.on).toBeDefined();
+	expect(omni_server.off).toBeDefined();
+	expect(omni_server.create_channel).toBeDefined();
+	expect(omni_server.create_user).toBeDefined();
+	expect(omni_server.delete_channel).toBeDefined();
+	expect(omni_server.delete_message).toBeDefined();
+	expect(omni_server.delete_user).toBeDefined();
+	expect(omni_server.get_all_channels).toBeDefined();
+	expect(omni_server.get_all_online_local_users).toBeDefined();
+	expect(omni_server.get_all_online_remote_users).toBeDefined();
+	expect(omni_server.get_all_online_users).toBeDefined();
+	expect(omni_server.get_channel).toBeDefined();
+	expect(omni_server.get_messages).toBeDefined();
+	expect(omni_server.get_online_local_users).toBeDefined();
+	expect(omni_server.get_online_remote_users).toBeDefined();
+	expect(omni_server.get_online_users).toBeDefined();
+	expect(omni_server.get_online_users).toBeDefined();
+	expect(omni_server.get_user).toBeDefined();
+	expect(omni_server.login_user).toBeDefined();
+	expect(omni_server.logout_user).toBeDefined();
+	expect(omni_server.send_message).toBeDefined();
+	expect(omni_server.send_pair_request).toBeDefined();
 });
 
 test("Omni starts without exceptions", () => {
-	omni.start("defaultconf.json");
+	omni_server.start("defaultconf.json");
 });
 
 let user_id = null;
 test("Omni successfully creates a user", async () => {
-	user_id = await omni.create_user("test");
+	user_id = await omni_server.create_user("test");
 	expect(typeof(user_id)).toBe("string");
 });
 
 test("Omni prevents duplicate usernames", async () => {
-	expect(await omni.create_user("test")).toBe(null);
+	expect(await omni_server.create_user("test")).toBe(null);
 });
 
 test("Omni successfully creates a channel", async () => {
-	expect(typeof(await omni.create_channel("test"))).toBe("string");
+	expect(typeof(await omni_server.create_channel("test"))).toBe("string");
 });
 
 test("Omni prevents duplicate channel names", async () => {
-	expect(await omni.create_channel("test")).toBe(null);
+	expect(await omni_server.create_channel("test")).toBe(null);
 });
 
 test("Omni successfully logs in a user", async () => {
-	expect(await omni.login_user(user_id)).toBe(true);
+	expect(await omni_server.login_user(user_id)).toBe(true);
 });
 
 test("Omni successfully stops", () => {
-	omni.stop();
+	omni_server.stop();
 });

@@ -2,12 +2,48 @@ const fs = require("fs");
 const { v4: uuidv4 } = require("uuid");
 const { MemorySource } = require("@orbit/memory");
 const { WebSocketServer } = require("ws");
-//const { JSONAPISource } = require("@orbit/jsonapi");
+const { JSONAPISource } = require("@orbit/jsonapi");
+const { Coordinator, RequestStrategy, SyncStrategy } = require("@orbit/coordinator");
 
 const schema = require("./schema");
 
-function create() {
-	const database = new MemorySource({ schema });
+async function create(settings = {}) {
+	let database = new MemorySource({ schema });
+	let backing_store = null;
+	let coordinator = null;;
+
+	if (settings.json_api) {
+		backing_store = new JSONAPISource({
+			schema,
+			name: "remote",
+			host: settings.json_api.host,
+			namespace: settings.json_api.namespace
+		});
+		
+		coordinator = new Coordinator();
+		coordinator.addSource(database);
+		coordinator.addSource(backing_store);
+		coordinator.addStrategy(new RequestStrategy({
+			source: "memory",
+			on: "beforeQuery",
+			target: "remote",
+			action: "query",
+			blocking: false
+		}));
+		coordinator.addStrategy(new RequestStrategy({
+			source: "memory",
+			on: "beforeUpdate",
+			target: "remote",
+			action: "update",
+			blocking: false
+		}));
+		coordinator.addStrategy(new SyncStrategy({
+			source: "remote",
+			target: "memory",
+			blocking: false
+		}));
+		await coordinator.activate();
+	}
 
 	let wss = null;
 	let peer_connections = {};

@@ -1,12 +1,13 @@
 const Omni = require("./src/index.js");
-const omni_server = Omni.create();
+let omni_server;
 
 test("Omni exports properly", () =>{
 	expect(Omni).toBeDefined();
 	expect(Omni.create).toBeDefined();
 });
 
-test("Omni creates server properly", () => {
+test("Omni creates server properly", async () => {
+	omni_server = await Omni.create();
 	expect(omni_server).toBeDefined();
 	expect(omni_server.start).toBeDefined();
 	expect(omni_server.stop).toBeDefined();

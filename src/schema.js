@@ -27,7 +27,8 @@ module.exports = new RecordSchema({
 			attributes: {
 				name: { type: "string" },
 				admin_only: { type: "boolean" },
-				is_private: { type: "boolean" }
+				is_private: { type: "boolean" },
+				timestamp: { type: "number" }
 			},
 			relationships: {
 				messages: { kind: "hasMany", type: "message", inverse: "channel" },

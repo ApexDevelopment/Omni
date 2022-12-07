@@ -5,7 +5,7 @@ const { WebSocketServer } = require("ws");
 //const { JSONAPISource } = require("@orbit/jsonapi");
 
 const schema = require("./schema");
-const memory = new MemorySource({ schema });
+const database = new MemorySource({ schema });
 
 let wss = null;
 let peer_connections = {};
@@ -27,7 +27,7 @@ class EventHandler {
 }
 
 function load_server_or_make_default(id, name) {
-	this_server = memory.cache.query((q) => q.findRecord({ type: "peer", id }));
+	this_server = database.cache.query((q) => q.findRecord({ type: "peer", id }));
 	if (!this_server) {
 		this_server = {
 			type: "peer",
@@ -44,11 +44,11 @@ function load_server_or_make_default(id, name) {
 		}
 	}
 
-	memory.update((t) => t.addRecord(this_server));
+	database.update((t) => t.addRecord(this_server));
 }
 
 function find_user_by_username(username) {
-	let user = memory.cache.query((q) =>
+	let user = database.cache.query((q) =>
 		q
 			.findRecords("user")
 			.filter({ attribute: "username", value: username })
@@ -112,21 +112,21 @@ async function create_user(username, admin = false, peer_id = null) {
 		}
 	};
 
-	await memory.update((t) => t.addRecord(user));
+	await database.update((t) => t.addRecord(user));
 	emit("user_create", user);
 	return id;
 }
 
 async function delete_user(id) {
-	await memory.update((t) => t.removeRecord({ type: "user", id }));
+	await database.update((t) => t.removeRecord({ type: "user", id }));
 }
 
-function get_user(id) {
-	return memory.cache.query((q) => q.findRecord({ type: "user", id }));
+async function get_user(id) {
+	return await database.query((q) => q.findRecord({ type: "user", id }));
 }
 
-function login_user(id) {
-	let user = get_user(id);
+async function login_user(id) {
+	let user = await get_user(id);
 
 	if (!user) {
 		return false;
@@ -137,8 +137,8 @@ function login_user(id) {
 	return true;
 }
 
-function logout_user(id) {
-	let user = get_user(id);
+async function logout_user(id) {
+	let user = await get_user(id);
 
 	if (!user || !online_users[id]) {
 		return false;
@@ -153,66 +153,92 @@ function get_all_online_users() {
 	return Object.keys(online_users);
 }
 
-function get_all_online_local_users() {
-	return Object.keys(online_users).filter((user_id) => {
-		let user = get_user(user_id);
-		return user.relationships.peer.data.id == this_server.id;
-	});
+async function get_all_online_local_users() {
+	let online_local_users = [];
+
+	for (let user_id in online_users) {
+		let user = await get_user(user_id);
+		if (user.relationships.peer.data.id == this_server.id) {
+			online_local_users.push(user);
+		}
+	}
+
+	return online_local_users;
 }
 
-function get_all_online_remote_users() {
-	return Object.keys(online_users).filter((user_id) => {
-		let user = get_user(user_id);
-		return user.relationships.peer.data.id != this_server.id;
-	});
+async function get_all_online_remote_users() {
+	let online_remote_users = [];
+
+	for (let user_id in online_users) {
+		let user = await get_user(user_id);
+		if (user.relationships.peer.data.id != this_server.id) {
+			online_remote_users.push(user);
+		}
+	}
+
+	return online_remote_users;
 }
 
-function get_online_users(channel_id) {
-	if (!get_channel(channel_id)) {
+async function get_online_users(channel_id) {
+	if (!(await get_channel(channel_id))) {
 		return null;
 	}
 
-	// TODO: Figure out best way to filter by channel here
-	return online_users;
-	/*
-	return Object.keys(online_users).filter((user_id) => {
-		return memory.cache.query((q) =>
-			q
-				.findRelatedRecords({ type: "user", id: user_id }, "channels")
-		//return channels[channel_id].admin_only ? user_database[user_id].admin : true;
-	});*/
+	let online_users_in_channel = [];
+
+	for (let user_id in online_users) {
+		let user = await get_user(user_id);
+		if (user.attributes.admin || !(await get_channel(channel_id)).attributes.admin_only) {
+			online_users_in_channel.push(user);
+		}
+	}
+
+	return online_users_in_channel;
 }
 
-function get_online_local_users(channel_id) {
-	if (!get_channel(channel_id)) {
+async function get_online_local_users(channel_id) {
+	if (!(await get_channel(channel_id))) {
 		return null;
 	}
 
-	// TODO: Figure out best way to filter by channel here
-	return Object.keys(online_users).filter((user_id) => {
-		let user = get_user(user_id);
-		return user.relationships.peer.data.id == this_server.id;
-	});
+	let online_local_users = [];
+
+	for (let user_id in online_users) {
+		let user = await get_user(user_id);
+		if (user.relationships.peer.data.id == this_server.id && (user.attributes.admin || !(await get_channel(channel_id)).attributes.admin_only)) {
+			online_local_users.push(user);
+		}
+	}
+
+	return online_local_users;
 }
 
-function get_online_remote_users(channel_id) {
+async function get_online_remote_users(channel_id) {
 	if (!get_channel(channel_id)) {
 		return null;
 	}
+	
+	let online_remote_users = [];
 
-	// TODO: Figure out best way to filter by channel here
-	return Object.keys(online_users).filter((user_id) => {
-		let user = get_user(user_id);
-		return user.relationships.peer.data.id != this_server.id;
-	});
+	for (let user_id in online_users) {
+		let user = await get_user(user_id);
+		if (user.relationships.peer.data.id != this_server.id && (user.attributes.admin || !(await get_channel(channel_id)).attributes.admin_only)) {
+			online_remote_users.push(user);
+		}
+	}
+
+	return online_remote_users;
 }
 
 async function get_all_channels() {
-	return await memory.query((q) => q.findRecords("channel"));
+	return (await database.query((q) => q.findRecords("channel"))).sort((a, b) => {
+		// Why? Because we can.
+		return a.attributes.timestamp - b.attributes.timestamp;
+	});
 }
 
 async function get_channel(id) {
-	return await memory.query((q) => q.findRecord({ type: "channel", id }));
+	return await database.query((q) => q.findRecord({ type: "channel", id }));
 }
 
 async function create_channel(name, admin_only = false, is_private = false) {
@@ -222,31 +248,35 @@ async function create_channel(name, admin_only = false, is_private = false) {
 		attributes: {
 			name,
 			admin_only,
-			is_private
+			is_private,
+			timestamp: Date.now()
 		},
 		relationships: {
 			peer: { data: { type: "peer", id: this_server.id } }
 		}
 	}
 
-	await memory.update((t) => t.addRecord(channel));
+	await database.update((t) => t.addRecord(channel));
 	emit("channel_create", channel);
 	return channel.id;
 }
 
-async function create_remote_channel(name, channel_id, peer_id) {
+async function create_remote_channel(name, timestamp, channel_id, peer_id) {
 	let channel = {
 		type: "channel",
 		id: channel_id,
 		attributes: {
-			name
+			name,
+			admin_only: false,
+			is_private: false,
+			timestamp
 		},
 		relationships: {
 			peer: { data: { type: "peer", id: peer_id } }
 		}
 	}
 
-	await memory.update((t) => t.addRecord(channel));
+	await database.update((t) => t.addRecord(channel));
 	emit("channel_create", channel);
 	return channel.id;
 }
@@ -258,11 +288,12 @@ async function delete_channel(id) {
 		return false;
 	}
 
-	await memory.update((t) => t.removeRecord({ type: "channel", id }));
+	await database.update((t) => t.removeRecord({ type: "channel", id }));
 
 	// Also delete all associated messages
-	await memory.update((t) =>
-		t.removeRecords("message").filter({ attribute: "channel", value: id })
+	await database.update((t) =>
+		// FIXME
+		{}//t.removeRecords("message").filter({ attribute: "channel", value: id })
 	);
 
 	emit("channel_delete", id);
@@ -289,13 +320,13 @@ async function send_message(user_id, channel_id, content) {
 		}
 	};
 
-	await memory.update((t) => t.addRecord(message));
+	await database.update((t) => t.addRecord(message));
 	emit("message", message);
 	return message.id;
 }
 
 async function delete_message(id) {
-	await memory.update((t) => t.removeRecord({ type: "message", id }));
+	await database.update((t) => t.removeRecord({ type: "message", id }));
 	emit("message_delete", id);
 }
 
@@ -306,13 +337,15 @@ async function get_messages(channel_id, timestamp, limit = 50) {
 		return null;
 	}
 
-	return (await memory.query((q) =>
+	return (await database.query((q) =>
 		q
 			.findRecords("message")
-			.filter({ attribute: "channel", value: channel_id })
-			.filter({ attribute: "timestamp", value: timestamp, op: "<=" })
-			.page({offset: 0, limit})
-	)).sort((a, b) => a.attributes.timestamp - b.attributes.timestamp);
+			.filter(
+				{ relation: "channel", record: { type: "channel", id: channel_id }})
+	))
+		.filter((message) => message.attributes.timestamp < timestamp) // Annoyingly, I couldn't get this to work in the query
+		.sort((a, b) => a.attributes.timestamp - b.attributes.timestamp)
+		.slice(0, limit);
 }
 
 function peer_online(peer_id) {
@@ -381,7 +414,7 @@ function set_up_handlers(websocket, peer_id) {
 				}
 				break;
 			case "create_channel":
-				let new_channel_id = await create_remote_channel(data.name, data.id, peer_id);
+				let new_channel_id = await create_remote_channel(data.name, data.id, peer_id, data.timestamp);
 				websocket.send(JSON.stringify({
 					type: "create_channel_success",
 					id: new_channel_id
@@ -465,7 +498,7 @@ function send_pair_request(ip, port) {
 					}
 				}
 
-				memory.update((t) => {
+				database.update((t) => {
 					t.addRecord(peer);
 				});
 
@@ -518,7 +551,7 @@ function await_handshake(socket) {
 function start(config_path) {
 	config = JSON.parse(fs.readFileSync(config_path, "utf8"));
 	load_server_or_make_default(config.server_id, config.server_name);
-	wss = new WebSocketServer({ port: config.port, noServer: true });
+	wss = new WebSocketServer({ port: config.server_port });
 
 	wss.on("connection", (ws, req) => {
 		console.log(`New connection from ${req.socket.remoteAddress}`);
@@ -537,7 +570,7 @@ function start(config_path) {
 	});
 
 	// Connect to all peers in Orbit database
-	memory.query((q) => q.findRecords("peer")).then((peers) => {
+	database.query((q) => q.findRecords("peer")).then((peers) => {
 		peers.forEach((peer) => {
 			if (peer.id != this_server.id) {
 				connect_to_peer(peer);

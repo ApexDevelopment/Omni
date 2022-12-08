@@ -61,6 +61,10 @@ test("Omni successfully logs in a user", async () => {
 	expect(await omni_server.login_user(user_id)).toBe(true);
 });
 
+test("Omni prevents logging in with bogus ID", async () => {
+	expect(await omni_server.login_user("bogus")).toBe(false);
+});
+
 test("Omni successfully stops", () => {
 	omni_server.stop();
 });

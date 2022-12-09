@@ -1,7 +1,7 @@
 const fs = require("fs");
 const { v4: uuidv4 } = require("uuid");
 const { MemorySource } = require("@orbit/memory");
-const { WebSocketServer } = require("ws");
+const { WebSocket, WebSocketServer } = require("ws");
 const { JSONAPISource } = require("@orbit/jsonapi");
 const { Coordinator, RequestStrategy, SyncStrategy } = require("@orbit/coordinator");
 
@@ -10,7 +10,12 @@ const schema = require("./schema");
 async function create(settings = {}) {
 	let database = new MemorySource({ schema });
 	let backing_store = null;
-	let coordinator = null;;
+	let coordinator = null;
+
+	let pending_pair_requests = {
+		incoming: {},
+		outgoing: []
+	};
 
 	if (settings.json_api) {
 		backing_store = new JSONAPISource({
@@ -64,7 +69,7 @@ async function create(settings = {}) {
 		}
 	}
 	
-	function load_server_or_make_default(id, name) {
+	function instantiate_server_information(id, name, address, port) {
 		this_server = database.cache.query((q) => q.findRecord({ type: "peer", id }));
 		if (!this_server) {
 			this_server = {
@@ -72,17 +77,28 @@ async function create(settings = {}) {
 				id,
 				attributes: {
 					name,
-					address: "localhost",
-					port: 8080
+					address,
+					port
 				},
 				relationships: {
 					channels: { data: [] },
 					users: { data: [] }
 				}
 			}
+
+			database.update((t) => t.addRecord(this_server));
 		}
-	
-		database.update((t) => t.addRecord(this_server));
+		else {
+			if (this_server.attributes.name !== name) {
+				database.update((t) => t.replaceAttribute(this_server, "name", name));
+			}
+			if (this_server.attributes.address !== address) {
+				database.update((t) => t.replaceAttribute(this_server, "address", address));
+			}
+			if (this_server.attributes.port !== port) {
+				database.update((t) => t.replaceAttribute(this_server, "port", port));
+			}
+		}
 	}
 	
 	function find_user_by_username(username) {
@@ -398,18 +414,41 @@ async function create(settings = {}) {
 			.sort((a, b) => a.attributes.timestamp - b.attributes.timestamp)
 			.slice(0, limit);
 	}
+
+	async function get_peer(id) {
+		return await database.query((q) => q.findRecord({ type: "peer", id }));
+	}
 	
-	function peer_online(peer_id) {
-		if (!get_peer(peer_id)) {
+	async function peer_online(peer_id, socket) {
+		let peer = await get_peer(peer_id);
+		if (!peer) {
 			return false;
 		}
 	
-		online_peers[peer_id] = true;
+		peer_connections[peer_id] = socket;
 		emit("peer_online", peer_id);
 		return true;
 	}
+
+	async function add_peer(id, name, address, port) {
+		let peer = {
+			type: "peer",
+			id,
+			attributes: {
+				name,
+				address,
+				port
+			},
+			relationships: {
+				channels: { data: [] },
+				users: { data: [] }
+			}
+		};
 	
-	function set_up_handlers(websocket, peer_id) {
+		await database.update((t) => t.addRecord(peer));
+	}
+	
+	function set_up_handlers(peer_id, websocket) {
 		websocket.on("message", async (message) => {
 			let data = JSON.parse(message);
 	
@@ -523,52 +562,56 @@ async function create(settings = {}) {
 		socket.on("open", () => {
 			socket.send(JSON.stringify({
 				type: "pair_request",
-				id: peer_id,
+				id: this_server.id,
 				name: this_server.attributes.name,
 				address: this_server.attributes.address,
 				port: this_server.attributes.port
 			}));
-		});
-	
-		socket.on("message", (message) => {
-			let data = JSON.parse(message);
-	
-			switch (data.type) {
-				case "pair_accept":
-					let peer = {
-						type: "peer",
-						id: data.id,
-						attributes: {
-							name: data.name,
-							address: data.address,
-							port: data.port
-						},
-						relationships: {
-							channels: { data: [] },
-							users: { data: [] }
-						}
-					}
-	
-					database.update((t) => {
-						t.addRecord(peer);
-					});
-	
-					break;
-				case "pair_reject":
-					console.log(`Pairing rejected by ${ip}:${port}`);
-					break;
-				default:
-					console.log(`Unknown response to pair request: ${data.type}`);
-			}
+
+			pending_pair_requests.outgoing.push({ socket: socket, ip: ip, port: port });
+			socket.close();
 		});
 	}
+
+	async function respond_to_pair_request(id, accepted) {
+		let pair_request = pending_pair_requests.incoming[id];
+		
+		if (!pair_request) {
+			return false;
+		}
+
+		if (accepted) add_peer(id, pair_request.name, pair_request.address, pair_request.port);
+		let socket = new WebSocket("ws://" + pair_request.address + ":" + pair_request.port);
+
+		socket.on("open", () => {
+			socket.send(JSON.stringify({
+				type: accepted ? "pair_accept" : "pair_reject",
+				id: this_server.id,
+				name: this_server.attributes.name,
+				address: this_server.attributes.address,
+				port: this_server.attributes.port
+			}));
+
+			peer_online(id, socket);
+		});
+
+		socket.on("error", (error) => {
+			console.log(error);
+		});
+
+		return true;
+	}
 	
+	async function has_peer(id) {
+		return (await database.query((q) => q.findRecords("peer").filter({ attribute: "id", value: id }))).length > 0;
+	}
+
 	function connect_to_peer(peer) {
 		if (peer.id == this_server.id) {
 			return false;
 		}
 	
-		if (connected_peers[peer.id]) {
+		if (peer_connections[peer.id]) {
 			return false;
 		}
 	
@@ -579,20 +622,48 @@ async function create(settings = {}) {
 				type: "handshake",
 				id: this_server.id
 			}));
+
+			peer_online(peer.id, socket);
 		});
 	
-		connected_peers[peer.id] = socket;
 		return true;
 	}
 	
-	function await_handshake(socket) {
+	function await_handshake_or_pair_request(socket) {
 		return new Promise((resolve, reject) => {
 			socket.on("message", (message) => {
 				let data = JSON.parse(message);
 	
 				if (data.type == "handshake") {
 					resolve(data);
-				} else {
+				}
+				else if (data.type == "pair_accept" && pending_pair_requests.outgoing.findIndex((request) => request.ip == data.address && request.port == data.port) != -1) {
+					pending_pair_requests.outgoing = pending_pair_requests.outgoing.filter((request) => request.ip != data.address && request.port != data.port);
+					add_peer(data.id, data.name, data.address, data.port).then(() => {
+						emit("pair_accept", data);
+						resolve(data);
+					});
+				}
+				else if (data.type == "pair_reject" && pending_pair_requests.outgoing.findIndex((request) => request.ip == data.address && request.port == data.port) != -1) {
+					pending_pair_requests.outgoing = pending_pair_requests.outgoing.filter((request) => request.ip != data.address && request.port != data.port);
+					emit("pair_reject", data);
+					reject("Pair request rejected");
+				}
+				else if (data.type == "pair_request") {
+					has_peer(data.id).then((is_peer) => {
+						if (is_peer) {
+							socket.send(JSON.stringify({
+								type: "pair_reject"
+							}));
+						}
+						else {
+							pending_pair_requests.incoming[data.id] = { name: data.name, address: data.address, port: data.port };
+							emit("pair_request", data);
+							reject("Server is not yet paired, awaiting pair approval to continue");
+						}
+					});
+				}
+				else {
 					reject("Invalid handshake");
 				}
 			});
@@ -601,15 +672,15 @@ async function create(settings = {}) {
 	
 	function start(config_path) {
 		config = JSON.parse(fs.readFileSync(config_path, "utf8"));
-		load_server_or_make_default(config.server_id, config.server_name);
+		instantiate_server_information(config.server_id, config.server_name, "localhost", config.server_port);
 		wss = new WebSocketServer({ port: config.server_port });
 	
 		wss.on("connection", (ws, req) => {
 			console.log(`New connection from ${req.socket.remoteAddress}`);
-			await_handshake(ws).then((data) => {
+			await_handshake_or_pair_request(ws).then((data) => {
 				console.log(`Handshake from ${data.id}`);
-				peer_online(data.id);
-				set_up_handlers(ws, data.id);
+				peer_online(data.id, ws);
+				set_up_handlers(data.id, ws);
 			}).catch((err) => {
 				console.log(`Peer handshake error: ${err}`);
 				ws.close();
@@ -635,6 +706,13 @@ async function create(settings = {}) {
 			wss.close();
 			wss = null;
 		}
+
+		// Close all peer connections
+		for (let peer_id in peer_connections) {
+			if (peer_connections[peer_id].readyState == WebSocket.OPEN || peer_connections[peer_id].readyState == WebSocket.CONNECTING) {
+				peer_connections[peer_id].close();
+			}
+		}
 	}
 
 	return {
@@ -647,7 +725,12 @@ async function create(settings = {}) {
 		get_all_channels, get_channel,
 		get_all_online_users, get_all_online_local_users, get_all_online_remote_users,
 		get_online_users, get_online_local_users, get_online_remote_users,
-		send_pair_request
+		send_pair_request, respond_to_pair_request,
+
+		id: () => this_server.id,
+		name: () => this_server.attributes.name,
+		address: () => this_server.attributes.address,
+		port: () => this_server.attributes.port
 	}
 }
 

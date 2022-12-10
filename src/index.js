@@ -738,6 +738,7 @@ async function create(settings = {}) {
 		get_all_online_users, get_all_online_local_users, get_all_online_remote_users,
 		get_online_users, get_online_local_users, get_online_remote_users,
 		send_pair_request, respond_to_pair_request,
+		get_peer,
 
 		id: () => this_server.id,
 		name: () => this_server.attributes.name,

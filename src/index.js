@@ -557,6 +557,16 @@ async function create(settings = {}) {
 	}
 	
 	function send_pair_request(ip, port) {
+		if (ip == this_server.attributes.address && port == this_server.attributes.port) {
+			return false;
+		}
+
+		if (pending_pair_requests.outgoing.find((pair_request) => {
+			return pair_request.ip == ip && pair_request.port == port;
+		})) {
+			return false;
+		}
+
 		let socket = new WebSocket("ws://" + ip + ":" + port);
 	
 		socket.on("open", () => {
@@ -571,6 +581,8 @@ async function create(settings = {}) {
 			pending_pair_requests.outgoing.push({ socket: socket, ip: ip, port: port });
 			socket.close();
 		});
+
+		return true;
 	}
 
 	async function respond_to_pair_request(id, accepted) {

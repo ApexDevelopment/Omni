@@ -1,4 +1,5 @@
 const fs = require("fs");
+const ip6addr = require("ip6addr");
 const { v4: uuidv4 } = require("uuid");
 const { MemorySource } = require("@orbit/memory");
 const { WebSocket, WebSocketServer } = require("ws");
@@ -660,7 +661,7 @@ async function create(settings = {}) {
 			return false;
 		}
 	
-		let socket = new WebSocket(`ws://${peer.ip}:${peer.port}/`);
+		let socket = new WebSocket(`ws://${peer.attributes.address}:${peer.attributes.port}/`);
 	
 		socket.on("open", () => {
 			socket.send(JSON.stringify({
@@ -678,7 +679,7 @@ async function create(settings = {}) {
 		return new Promise((resolve, reject) => {
 			socket.on("message", (message) => {
 				let data = JSON.parse(message);
-				let address = socket._socket.remoteAddress;
+				let address = ip6addr.parse(socket._socket.remoteAddress).toString({ format: "v4" });
 				data.address = address;
 	
 				if (data.type == "handshake") {
@@ -711,7 +712,7 @@ async function create(settings = {}) {
 					});
 				}
 				else {
-					reject("Invalid handshake");
+					reject(`Invalid handshake: ${data}`);
 				}
 			});
 		});

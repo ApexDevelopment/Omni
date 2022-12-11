@@ -1,6 +1,6 @@
 {
   "name": "omni",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "description": "A distributed messaging system",
   "main": "src/index.js",
   "scripts": {
@@ -21,6 +21,7 @@
     "@orbit/jsonapi": "^0.17.1",
     "@orbit/memory": "^0.17.2",
     "@orbit/records": "^0.17.0",
+    "ip6addr": "^0.2.5",
     "uuid": "^9.0.0",
     "ws": "^8.11.0"
   },

@@ -323,13 +323,26 @@ async function create(settings = {}) {
 				peer: { data: { type: "peer", id: this_server.id } }
 			}
 		}
-	
+
+		if (!is_private) {
+			// Tell peers about new channel
+			for (let peer_id in peer_connections) {
+				let socket = peer_connections[peer_id];
+				socket.emit("channel_create", channel);
+			}
+		}
+
 		await database.update((t) => t.addRecord(channel));
 		emit("channel_create", channel);
 		return channel.id;
 	}
 	
 	async function create_remote_channel(name, timestamp, channel_id, peer_id) {
+		// Check if channel exists first
+		if (await get_channel(channel_id)) {
+			return null;
+		}
+
 		let channel = {
 			type: "channel",
 			id: channel_id,
@@ -352,7 +365,33 @@ async function create(settings = {}) {
 	async function delete_channel(id) {
 		let channel = get_channel(id);
 	
-		if (!channel) {
+		if (!channel || channel.relationships.peer.data.id != this_server.id) {
+			return false;
+		}
+	
+		// Also delete all associated messages
+		/*await database.update((t) =>
+			t.removeFromRelatedRecords({ type: "channel", id }, "messages", { type: "message", id: null })
+		);*/
+	
+		if (!channel.attributes.is_private) {
+			// Tell peers about channel deletion
+			for (let peer_id in peer_connections) {
+				let socket = peer_connections[peer_id];
+				socket.emit("channel_delete", channel);
+			}
+		}
+
+		await database.update((t) => t.removeRecord({ type: "channel", id }));
+	
+		emit("channel_delete", id);
+		return true;
+	}
+
+	async function delete_remote_channel(id) {
+		let channel = get_channel(id);
+	
+		if (!channel || channel.relationships.peer.data.id == this_server.id) {
 			return false;
 		}
 	
@@ -503,24 +542,18 @@ async function create(settings = {}) {
 						}));
 					}
 					break;
-				case "create_channel":
+				case "channel_create":
 					let new_channel_id = await create_remote_channel(data.name, data.id, peer_id, data.timestamp);
-					websocket.send(JSON.stringify({
-						type: "create_channel_success",
-						id: new_channel_id
-					}));
+					console.log(`Created channel ${new_channel_id} from peer ${peer_id}`);
 					break;
-				case "delete_channel":
-					if (await delete_channel(data.id)) {
-						websocket.send(JSON.stringify({
-							type: "delete_channel_success",
-							id: data.id
-						}));
-					} else {
-						websocket.send(JSON.stringify({
-							type: "delete_channel_failure",
-							id: data.id
-						}));
+				case "channel_delete":
+					let channel = await get_channel(data.id);
+
+					if (channel && channel.attributes.peer_id == peer_id) {
+						let success = await delete_remote_channel(data.id)
+						if (success) {
+							console.log(`Deleted channel ${data.id} from peer ${peer_id}`);
+						}
 					}
 					break;
 				case "send_message":

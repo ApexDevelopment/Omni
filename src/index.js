@@ -607,7 +607,7 @@ async function create(settings = {}) {
 				type: "pair_request",
 				id: this_server.id,
 				name: this_server.attributes.name,
-				address: this_server.attributes.address,
+				address: socket._socket.localAddress,
 				port: this_server.attributes.port
 			}));
 
@@ -633,7 +633,7 @@ async function create(settings = {}) {
 				type: accepted ? "pair_accept" : "pair_reject",
 				id: this_server.id,
 				name: this_server.attributes.name,
-				address: this_server.attributes.address,
+				address: socket._socket.localAddress,
 				port: this_server.attributes.port
 			}));
 
@@ -678,19 +678,21 @@ async function create(settings = {}) {
 		return new Promise((resolve, reject) => {
 			socket.on("message", (message) => {
 				let data = JSON.parse(message);
+				let address = socket._socket.remoteAddress;
+				data.address = address;
 	
 				if (data.type == "handshake") {
 					resolve(data);
 				}
-				else if (data.type == "pair_accept" && pending_pair_requests.outgoing.findIndex((request) => request.ip == data.address && request.port == data.port) != -1) {
-					pending_pair_requests.outgoing = pending_pair_requests.outgoing.filter((request) => request.ip != data.address && request.port != data.port);
+				else if (data.type == "pair_accept" && pending_pair_requests.outgoing.findIndex((request) => request.ip == address && request.port == data.port) != -1) {
+					pending_pair_requests.outgoing = pending_pair_requests.outgoing.filter((request) => request.ip != address && request.port != data.port);
 					add_peer(data.id, data.name, data.address, data.port).then(() => {
 						emit("pair_accept", data);
 						resolve(data);
 					});
 				}
-				else if (data.type == "pair_reject" && pending_pair_requests.outgoing.findIndex((request) => request.ip == data.address && request.port == data.port) != -1) {
-					pending_pair_requests.outgoing = pending_pair_requests.outgoing.filter((request) => request.ip != data.address && request.port != data.port);
+				else if (data.type == "pair_reject" && pending_pair_requests.outgoing.findIndex((request) => request.ip == address && request.port == data.port) != -1) {
+					pending_pair_requests.outgoing = pending_pair_requests.outgoing.filter((request) => request.ip != address && request.port != data.port);
 					emit("pair_reject", data);
 					reject("Pair request rejected");
 				}
@@ -702,7 +704,7 @@ async function create(settings = {}) {
 							}));
 						}
 						else {
-							pending_pair_requests.incoming[data.id] = { name: data.name, address: data.address, port: data.port };
+							pending_pair_requests.incoming[data.id] = { name: data.name, address: address, port: data.port };
 							emit("pair_request", data);
 							reject("Server is not yet paired, awaiting pair approval to continue");
 						}

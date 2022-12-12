@@ -147,13 +147,9 @@ async function create(settings = {}) {
 		});
 	}
 	
-	async function create_user(username, admin = false, peer_id = null) {
+	async function create_user(username, admin = false) {
 		if (find_user_by_username(username) != null) {
 			return null;
-		}
-	
-		if (peer_id == null) {
-			peer_id = this_server.id;
 		}
 	
 		const id = uuidv4();
@@ -163,12 +159,31 @@ async function create(settings = {}) {
 			id,
 			attributes: { username, admin },
 			relationships: {
+				peer: { data: { type: "peer", id: this_server.id } }
+			}
+		};
+	
+		await database.update((t) => t.addRecord(user));
+		emit("create_user", user);
+		return id;
+	}
+
+	async function create_remote_user(username, id, peer_id) {
+		/*if (find_user_by_username(username) != null) {
+			return null;
+		}*/
+	
+		let user = {
+			type: "user",
+			id,
+			attributes: { username, admin: false },
+			relationships: {
 				peer: { data: { type: "peer", id: peer_id } }
 			}
 		};
 	
 		await database.update((t) => t.addRecord(user));
-		emit("user_create", user);
+		emit("create_user", user);
 		return id;
 	}
 	
@@ -206,6 +221,20 @@ async function create(settings = {}) {
 	
 	function get_all_online_users() {
 		return Object.keys(online_users);
+	}
+
+	async function get_all_local_users() {
+		let local_users = [];
+	
+		let users = await database.query((q) => q.findRecords("user"));
+		// TODO: Probably could use Orbit filtering here
+		for (let user of users) {
+			if (user.relationships.peer.data.id == this_server.id) {
+				local_users.push(user);
+			}
+		}
+	
+		return local_users;
 	}
 	
 	async function get_all_online_local_users() {
@@ -287,7 +316,17 @@ async function create(settings = {}) {
 	
 	async function get_all_channels() {
 		return (await database.query((q) => q.findRecords("channel"))).sort((a, b) => {
-			// Why? Because we can.
+			// Sort by creation time
+			return a.attributes.timestamp - b.attributes.timestamp;
+		});
+	}
+	
+	async function get_all_local_channels() {
+		return (await database.query((q) =>
+			q
+				.findRecords("channel")
+				.filter({ relation: "peer", record: { type: "peer", id: this_server.id } })
+		)).sort((a, b) => {
 			return a.attributes.timestamp - b.attributes.timestamp;
 		});
 	}
@@ -329,7 +368,12 @@ async function create(settings = {}) {
 			// Tell peers about new channel
 			for (let peer_id in peer_connections) {
 				let socket = peer_connections[peer_id];
-				socket.emit("channel_create", channel);
+				socket.send(JSON.stringify({
+					type: "channel_create",
+					id: channel.id,
+					name,
+					timestamp: channel.attributes.timestamp
+				}));
 			}
 		}
 
@@ -364,7 +408,7 @@ async function create(settings = {}) {
 	}
 	
 	async function delete_channel(id) {
-		let channel = get_channel(id);
+		let channel = await get_channel(id);
 	
 		if (!channel || channel.relationships.peer.data.id != this_server.id) {
 			return false;
@@ -379,7 +423,10 @@ async function create(settings = {}) {
 			// Tell peers about channel deletion
 			for (let peer_id in peer_connections) {
 				let socket = peer_connections[peer_id];
-				socket.emit("channel_delete", channel);
+				socket.send(JSON.stringify({
+					type: "channel_delete",
+					id: channel.id
+				}));
 			}
 		}
 
@@ -390,7 +437,7 @@ async function create(settings = {}) {
 	}
 
 	async function delete_remote_channel(id) {
-		let channel = get_channel(id);
+		let channel = await get_channel(id);
 	
 		if (!channel || channel.relationships.peer.data.id == this_server.id) {
 			return false;
@@ -408,9 +455,14 @@ async function create(settings = {}) {
 	}
 	
 	async function send_message(user_id, channel_id, content) {
+		let user = await get_user(user_id);
 		let channel = await get_channel(channel_id);
 	
 		if (!channel || !online_users[user_id]) {
+			return null;
+		}
+
+		if (channel.attributes.admin_only && !user.attributes.admin) {
 			return null;
 		}
 	
@@ -426,7 +478,52 @@ async function create(settings = {}) {
 				channel: { data: { type: "channel", id: channel_id } }
 			}
 		};
+
+		// If this message was sent from a local user we need to tell peers about it
+		if (user.relationships.peer.data.id == this_server.id && !channel.attributes.is_private) {
+			for (let peer_id in peer_connections) {
+				// Only send to peers that we know can see the channel
+				if (channel.relationships.peer.data.id == this_server.id || channel.relationships.peer.data.id == peer_id) {
+					let socket = peer_connections[peer_id];
+					socket.send(JSON.stringify({
+						type: "send_message",
+						user_id,
+						channel_id,
+						content
+					}));
+				}
+			}
+		}
 	
+		await database.update((t) => t.addRecord(message));
+		emit("message", message);
+		return message.id;
+	}
+
+	async function send_remote_message(user_id, channel_id, content, message_id, timestamp) {
+		let channel = await get_channel(channel_id);
+
+		if (!channel || !online_users[user_id]) {
+			return null;
+		}
+
+		if (channel.attributes.admin_only || channel.attributes.is_private) {
+			return null;
+		}
+
+		let message = {
+			type: "message",
+			id: message_id,
+			attributes: {
+				content,
+				timestamp
+			},
+			relationships: {
+				user: { data: { type: "user", id: user_id } },
+				channel: { data: { type: "channel", id: channel_id } }
+			}
+		}
+
 		await database.update((t) => t.addRecord(message));
 		emit("message", message);
 		return message.id;
@@ -466,7 +563,7 @@ async function create(settings = {}) {
 		}
 	
 		peer_connections[peer_id] = socket;
-		emit("peer_online", peer_id);
+		emit("peer_online", peer);
 		return true;
 	}
 
@@ -522,15 +619,10 @@ async function create(settings = {}) {
 					}
 					break;
 				case "create_user":
-					//let new_user_id = create_user(data.name, false, data);
-					// TODO: Add peer's user to db
-					websocket.send(JSON.stringify({
-						type: "create_user_success",
-						id: new_user_id
-					}));
+					await create_remote_user(data.username, data.id, peer_id);
 					break;
 				case "delete_user":
-					// This should be fine?
+					// TODO: Security
 					if (await delete_user(data.id)) {
 						websocket.send(JSON.stringify({
 							type: "delete_user_success",
@@ -544,7 +636,7 @@ async function create(settings = {}) {
 					}
 					break;
 				case "channel_create":
-					let new_channel_id = await create_remote_channel(data.name, data.id, peer_id, data.timestamp);
+					let new_channel_id = await create_remote_channel(data.name, data.timestamp, data.id, peer_id);
 					console.log(`Created channel ${new_channel_id} from peer ${peer_id}`);
 					break;
 				case "channel_delete":
@@ -558,24 +650,19 @@ async function create(settings = {}) {
 					}
 					break;
 				case "send_message":
-					let new_message_id = await send_message(data.user_id, data.channel_id, data.content);
-					websocket.send(JSON.stringify({
-						type: "send_message_success",
-						id: new_message_id
-					}));
+					// TODO: ID parity
+					console.log(`Received message from peer ${peer_id}: ${data.content}`);
+					let result = await send_remote_message(data.user_id, data.channel_id, data.content, data.message_id, data.timestamp);
+					if (result) {
+						console.log("Success");
+					} else {
+						console.log("Failure");
+					}
 					break;
 				case "delete_message":
-					if (await delete_message(data.id)) {
-						websocket.send(JSON.stringify({
-							type: "delete_message_success",
-							id: data.id
-						}));
-					} else {
-						websocket.send(JSON.stringify({
-							type: "delete_message_failure",
-							id: data.id
-						}));
-					}
+					//let message = await get_message(data.id);
+					// TODO: Security
+					delete_message(data.id);
 					break;
 				case "get_messages":
 					let messages = await get_messages(data.channel_id, data.timestamp, data.limit);
@@ -591,6 +678,8 @@ async function create(settings = {}) {
 	}
 	
 	function send_pair_request(ip, port) {
+		ip = ip6addr.parse(ip).toString({ format: "v4" });
+
 		if (ip == this_server.attributes.address && port == this_server.attributes.port) {
 			return false;
 		}
@@ -619,6 +708,39 @@ async function create(settings = {}) {
 		return true;
 	}
 
+	async function inform_peer(id) {
+		if (!peer_connections[id]) return false;
+		let socket = peer_connections[id];
+		let channels = await get_all_local_channels();
+		let users = await get_all_local_users();
+
+		for (let channel of channels) {
+			if (!channel.attributes.admin_only) {
+				socket.send(JSON.stringify({
+					type: "channel_create",
+					id: channel.id,
+					name: channel.attributes.name,
+					timestamp: channel.attributes.timestamp
+				}));
+			}
+		}
+
+		for (let user of users) {
+			socket.send(JSON.stringify({
+				type: "create_user",
+				id: user.id,
+				username: user.attributes.username
+			}));
+		}
+
+		for (let user_id in online_users) {
+			socket.send(JSON.stringify({
+				type: "login",
+				id: user_id
+			}));
+		}
+	}
+
 	async function respond_to_pair_request(id, accepted) {
 		let pair_request = pending_pair_requests.incoming[id];
 		
@@ -630,6 +752,16 @@ async function create(settings = {}) {
 		let socket = new WebSocket("ws://" + pair_request.address + ":" + pair_request.port);
 
 		socket.on("open", () => {
+			socket.once("message", async (message) => {
+				let data = JSON.parse(message);
+				if (data.type == "handshake_ack") {
+					console.log(`Paired with peer ${pair_request.name} (${id})`);
+					await peer_online(id, socket);
+					set_up_handlers(id, socket);
+					inform_peer(id);
+				}
+			});
+
 			socket.send(JSON.stringify({
 				type: accepted ? "pair_accept" : "pair_reject",
 				id: this_server.id,
@@ -637,8 +769,6 @@ async function create(settings = {}) {
 				address: socket._socket.localAddress,
 				port: this_server.attributes.port
 			}));
-
-			peer_online(id, socket);
 		});
 
 		socket.on("error", (error) => {
@@ -664,12 +794,20 @@ async function create(settings = {}) {
 		let socket = new WebSocket(`ws://${peer.attributes.address}:${peer.attributes.port}/`);
 	
 		socket.on("open", () => {
+			socket.once("message", async (message) => {
+				let data = JSON.parse(message);
+				if (data.type == "handshake_ack") {
+					console.log(`Connected to peer ${peer.attributes.name} (${peer.id})`);
+					await peer_online(peer.id, socket);
+					set_up_handlers(id, socket);
+					inform_peer(id);
+				}
+			});
+
 			socket.send(JSON.stringify({
 				type: "handshake",
 				id: this_server.id
 			}));
-
-			peer_online(peer.id, socket);
 		});
 	
 		return true;
@@ -707,12 +845,12 @@ async function create(settings = {}) {
 						else {
 							pending_pair_requests.incoming[data.id] = { name: data.name, address: address, port: data.port };
 							emit("pair_request", data);
-							reject("Server is not yet paired, awaiting pair approval to continue");
+							reject(`Server ${address}:${data.port} is not yet paired, awaiting pair approval from admin to continue`);
 						}
 					});
 				}
 				else {
-					reject(`Invalid handshake: ${data}`);
+					reject(data);
 				}
 			});
 		});
@@ -729,8 +867,15 @@ async function create(settings = {}) {
 				console.log(`Handshake from ${data.id}`);
 				peer_online(data.id, ws);
 				set_up_handlers(data.id, ws);
+
+				ws.send(JSON.stringify({
+					type: "handshake_ack"
+				}), () => {
+					console.log("Inform...");
+					inform_peer(data.id);
+				});
 			}).catch((err) => {
-				console.log(`Peer handshake error: ${err}`);
+				console.log("Peer handshake error:", err);
 				ws.close();
 			});
 		});

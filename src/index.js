@@ -531,6 +531,31 @@ async function create(settings = {}) {
 	}
 	
 	async function delete_message(id) {
+		let message = await get_message(id);
+		let channel = await get_channel(message.relationships.channel.data.id);
+		await database.update((t) => t.removeRecord({ type: "message", id }));
+
+		if (channel.relationships.peer.data.id == this_server.id && !channel.attributes.is_private && !channel.attributes.admin_only) {
+			for (let peer_id in peer_connections) {
+				let socket = peer_connections[peer_id];
+				socket.send(JSON.stringify({
+					type: "message_delete",
+					id
+				}));
+			}
+		}
+
+		emit("message_delete", id);
+	}
+
+	async function delete_remote_message(id, peer_id) {
+		let message = await get_message(id);
+		let channel = await get_channel(message.relationships.channel.data.id);
+
+		if (channel.relationships.peer.data.id != peer_id || channel.attributes.is_private || channel.attributes.admin_only) {
+			return;
+		}
+
 		await database.update((t) => t.removeRecord({ type: "message", id }));
 		emit("message_delete", id);
 	}
@@ -630,15 +655,12 @@ async function create(settings = {}) {
 					break;
 				}
 				case "send_message": {
-					// TODO: ID parity
 					let result = await send_remote_message(data.user_id, data.channel_id, data.content, data.message_id, data.timestamp);
 					console.log(`Received message from peer ${peer_id}: ${data.content} (success: ${result}})`);
 					break;
 				}
 				case "delete_message": {
-					//let message = await get_message(data.id);
-					// TODO: Security
-					delete_message(data.id);
+					delete_remote_message(data.id, peer_id);
 					break;
 				}
 				case "get_messages": {

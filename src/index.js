@@ -8,6 +8,17 @@ const { Coordinator, RequestStrategy, SyncStrategy } = require("@orbit/coordinat
 
 const schema = require("./schema");
 
+class EventHandler {
+	constructor(event, callback) {
+		this.event = event;
+		this.callback = callback;
+	}
+
+	fire(data) {
+		this.callback(data);
+	}
+}
+
 async function create(settings = {}) {
 	let database = new MemorySource({ schema });
 	let backing_store = null;
@@ -58,17 +69,6 @@ async function create(settings = {}) {
 	
 	let this_server = null;
 	let config = null;
-	
-	class EventHandler {
-		constructor(event, callback) {
-			this.event = event;
-			this.callback = callback;
-		}
-	
-		fire(data) {
-			this.callback(data);
-		}
-	}
 	
 	function instantiate_server_information(id, name, address, port) {
 		this_server = database.cache.query((q) => q.findRecord({ type: "peer", id }));
@@ -489,7 +489,8 @@ async function create(settings = {}) {
 						type: "send_message",
 						user_id,
 						channel_id,
-						content
+						content,
+						timestamp: message.attributes.timestamp
 					}));
 				}
 			}
@@ -590,56 +591,34 @@ async function create(settings = {}) {
 			let data = JSON.parse(message);
 	
 			switch (data.type) {
-				case "login":
+				case "login": {
 					// Should be fine?
-					if (login_user(data.id)) {
-						websocket.send(JSON.stringify({
-							type: "login_success",
-							id: data.id
-						}));
-					} else {
-						websocket.send(JSON.stringify({
-							type: "login_failure",
-							id: data.id
-						}));
-					}
+					let success = await login_user(data.id);
+					console.log(`Login user ${data.id} from peer ${peer_id}: ${success}`);
 					break;
-				case "logout":
+				}
+				case "logout": {
 					// Should be fine?
-					if (logout_user(data.id)) {
-						websocket.send(JSON.stringify({
-							type: "logout_success",
-							id: data.id
-						}));
-					} else {
-						websocket.send(JSON.stringify({
-							type: "logout_failure",
-							id: data.id
-						}));
-					}
+					let success = await logout_user(data.id);
+					console.log(`Logout user ${data.id} from peer ${peer_id}: ${success}`);
 					break;
-				case "create_user":
+				}
+				case "create_user": {
 					await create_remote_user(data.username, data.id, peer_id);
 					break;
-				case "delete_user":
+				}
+				case "delete_user": {
 					// TODO: Security
-					if (await delete_user(data.id)) {
-						websocket.send(JSON.stringify({
-							type: "delete_user_success",
-							id: data.id
-						}));
-					} else {
-						websocket.send(JSON.stringify({
-							type: "delete_user_failure",
-							id: data.id
-						}));
-					}
+					let success = await delete_user(data.id);
+					console.log(`Delete user ${data.id} from peer ${peer_id}: ${success}`);
 					break;
-				case "channel_create":
+				}
+				case "channel_create": {
 					let new_channel_id = await create_remote_channel(data.name, data.timestamp, data.id, peer_id);
 					console.log(`Created channel ${new_channel_id} from peer ${peer_id}`);
 					break;
-				case "channel_delete":
+				}
+				case "channel_delete": {
 					let channel = await get_channel(data.id);
 
 					if (channel && channel.attributes.peer_id == peer_id) {
@@ -649,28 +628,27 @@ async function create(settings = {}) {
 						}
 					}
 					break;
-				case "send_message":
+				}
+				case "send_message": {
 					// TODO: ID parity
-					console.log(`Received message from peer ${peer_id}: ${data.content}`);
 					let result = await send_remote_message(data.user_id, data.channel_id, data.content, data.message_id, data.timestamp);
-					if (result) {
-						console.log("Success");
-					} else {
-						console.log("Failure");
-					}
+					console.log(`Received message from peer ${peer_id}: ${data.content} (success: ${result}})`);
 					break;
-				case "delete_message":
+				}
+				case "delete_message": {
 					//let message = await get_message(data.id);
 					// TODO: Security
 					delete_message(data.id);
 					break;
-				case "get_messages":
+				}
+				case "get_messages": {
 					let messages = await get_messages(data.channel_id, data.timestamp, data.limit);
 					websocket.send(JSON.stringify({
 						type: "get_messages_success",
 						messages: messages
 					}));
 					break;
+				}
 				default:
 					console.log("Unknown message type: " + data.type);
 			}

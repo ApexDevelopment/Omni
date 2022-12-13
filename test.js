@@ -92,7 +92,7 @@ test("Pairing works", (done) => {
 		expect(await omni_server2.respond_to_pair_request(data.id, true)).toBe(true);
 	});
 
-	expect(omni_server1.send_pair_request("localhost", 7778)).toBe(true);
+	expect(omni_server1.send_pair_request("127.0.0.1", 7778)).toBe(true);
 });
 
 test("Omni successfully stops", () => {

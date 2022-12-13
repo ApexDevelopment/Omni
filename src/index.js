@@ -201,6 +201,17 @@ async function create(settings = {}) {
 		if (!user) {
 			return false;
 		}
+
+		// Inform peers of login
+		if (user.relationships.peer.data.id == this_server.id) {
+			for (let peer_id in peer_connections) {
+				let socket = peer_connections[peer_id];
+				socket.send(JSON.stringify({
+					type: "login",
+					id: id
+				}));
+			}
+		}
 	
 		online_users[id] = true;
 		emit("user_online", user);
@@ -212,6 +223,17 @@ async function create(settings = {}) {
 	
 		if (!user || !online_users[id]) {
 			return false;
+		}
+
+		// Inform peers of logout
+		if (user.relationships.peer.data.id == this_server.id) {
+			for (let peer_id in peer_connections) {
+				let socket = peer_connections[peer_id];
+				socket.send(JSON.stringify({
+					type: "login",
+					id: id
+				}));
+			}
 		}
 	
 		delete online_users[id];
@@ -646,11 +668,9 @@ async function create(settings = {}) {
 				case "channel_delete": {
 					let channel = await get_channel(data.id);
 
-					if (channel && channel.attributes.peer_id == peer_id) {
+					if (channel && channel.relationships.peer.data.id == peer_id) {
 						let success = await delete_remote_channel(data.id)
-						if (success) {
-							console.log(`Deleted channel ${data.id} from peer ${peer_id}`);
-						}
+						console.log(`Delete channel ${data.id} from peer ${peer_id}: ${success}`);
 					}
 					break;
 				}
@@ -715,7 +735,7 @@ async function create(settings = {}) {
 		let users = await get_all_local_users();
 
 		for (let channel of channels) {
-			if (!channel.attributes.admin_only) {
+			if (!channel.attributes.admin_only && !channel.attributes.is_private) {
 				socket.send(JSON.stringify({
 					type: "channel_create",
 					id: channel.id,

@@ -19,7 +19,6 @@ class EventBus {
 	}
 
 	on(event, callback) {
-		console.log(this, this.event_handlers, event, callback);
 		if (!this.event_handlers[event]) {
 			this.event_handlers[event] = [];
 		}

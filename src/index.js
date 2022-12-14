@@ -247,7 +247,10 @@ async function create(settings = {}) {
 	 * @returns {Promise<Object|null>} The user record, or null if no user was found.
 	 */
 	async function get_user(id) {
-		return await database.query((q) => q.findRecord({ type: "user", id }));
+		return (await database.query((q) => q.findRecord({
+			type: "user",
+			id
+		}))) || null;
 	}
 	
 	/**
@@ -303,7 +306,7 @@ async function create(settings = {}) {
 	
 		delete online_users[id];
 		event_bus.emit("user_offline", user);
-		return false;
+		return true;
 	}
 	
 	/**
@@ -411,7 +414,7 @@ async function create(settings = {}) {
 		let channel = await get_channel(channel_id);
 
 		if (!channel) {
-			return null;
+			return [];
 		}
 	
 		let online_local_users = [];
@@ -434,10 +437,10 @@ async function create(settings = {}) {
 	 * @returns {Promise<string[]>} An array of all online remote users in the channel.
 	 */
 	async function get_online_remote_users(channel_id) {
-		let channel = get_channel(channel_id);
+		let channel = await get_channel(channel_id);
 
 		if (!channel || channel.attributes.is_private) {
-			return null;
+			return [];
 		}
 		
 		let online_remote_users = [];
@@ -494,9 +497,9 @@ async function create(settings = {}) {
 	 *                                 no such channel exists.
 	 */
 	async function get_channel(id) {
-		return await database.query((q) =>
+		return (await database.query((q) =>
 			q.findRecord({ type: "channel", id })
-		);
+		)) || null;
 	}
 	
 	/**
@@ -671,7 +674,10 @@ async function create(settings = {}) {
 	 * @returns {Promise<Object|null>} The message, or null if it doesn't exist.
 	 */
 	async function get_message(id) {
-		return await database.query((q) => q.findRecord({ type: "message", id }));
+		return (await database.query((q) => q.findRecord({
+			type: "message",
+			id
+		}))) || null;
 	}
 	
 	/**
@@ -875,7 +881,10 @@ async function create(settings = {}) {
 	 * @returns {Promise<Object|null>} The peer, or null if it doesn't exist.
 	 */
 	async function get_peer(id) {
-		return await database.query((q) => q.findRecord({ type: "peer", id }));
+		return (await database.query((q) => q.findRecord({
+			type: "peer",
+			id
+		}))) || null;
 	}
 	
 	/**
@@ -1243,10 +1252,8 @@ async function create(settings = {}) {
 	
 		// Wait for new connections to the server.
 		wss.on("connection", (ws, req) => {
-			console.log(`New connection from ${req.socket.remoteAddress}`);
 			// Wait for the handshake message...
 			await_handshake_or_pair_request(ws).then((data) => {
-				console.log(`Handshake from ${data.id}`);
 				// If we get a valid handshake, mark the peer as online and set
 				// up handlers.
 				peer_online(data.id, ws);

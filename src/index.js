@@ -6,18 +6,8 @@ const { WebSocket, WebSocketServer } = require("ws");
 const { JSONAPISource } = require("@orbit/jsonapi");
 const { Coordinator, RequestStrategy, SyncStrategy } = require("@orbit/coordinator");
 
+const { EventBus } = require("./events");
 const schema = require("./schema");
-
-class EventHandler {
-	constructor(event, callback) {
-		this.event = event;
-		this.callback = callback;
-	}
-
-	fire(data) {
-		this.callback(data);
-	}
-}
 
 async function create(settings = {}) {
 	let database = new MemorySource({ schema });
@@ -65,7 +55,7 @@ async function create(settings = {}) {
 	let wss = null;
 	let peer_connections = {};
 	let online_users = {};
-	let event_handlers = {};
+	let event_bus = new EventBus();
 	
 	let this_server = null;
 	let config = null;
@@ -117,36 +107,6 @@ async function create(settings = {}) {
 		}
 	}
 	
-	function on(event, callback) {
-		if (!event_handlers[event]) {
-			event_handlers[event] = [];
-		}
-	
-		let handler = new EventHandler(event, callback);
-		event_handlers[event].push(handler);
-		return handler;
-	}
-	
-	function off(event, handler) {
-		if (!event_handlers[event]) {
-			return;
-		}
-		
-		event_handlers[event] = event_handlers[event].filter((event_handler) => {
-			return event_handler !== handler;
-		});
-	}
-	
-	function emit(event, data) {
-		if (!event_handlers[event]) {
-			return;
-		}
-	
-		event_handlers[event].forEach((event_handler) => {
-			event_handler.fire(data);
-		});
-	}
-	
 	async function create_user(username, admin = false) {
 		if (find_user_by_username(username) != null) {
 			return null;
@@ -164,7 +124,7 @@ async function create(settings = {}) {
 		};
 	
 		await database.update((t) => t.addRecord(user));
-		emit("create_user", user);
+		event_bus.emit("create_user", user);
 		return id;
 	}
 
@@ -183,7 +143,7 @@ async function create(settings = {}) {
 		};
 	
 		await database.update((t) => t.addRecord(user));
-		emit("create_user", user);
+		event_bus.emit("create_user", user);
 		return id;
 	}
 	
@@ -214,7 +174,7 @@ async function create(settings = {}) {
 		}
 	
 		online_users[id] = true;
-		emit("user_online", user);
+		event_bus.emit("user_online", user);
 		return true;
 	}
 	
@@ -237,7 +197,7 @@ async function create(settings = {}) {
 		}
 	
 		delete online_users[id];
-		emit("user_offline", user);
+		event_bus.emit("user_offline", user);
 		return false;
 	}
 	
@@ -413,7 +373,7 @@ async function create(settings = {}) {
 		}
 
 		await database.update((t) => t.addRecord(channel));
-		emit("channel_create", channel);
+		event_bus.emit("channel_create", channel);
 		return channel.id;
 	}
 	
@@ -438,7 +398,7 @@ async function create(settings = {}) {
 		}
 	
 		await database.update((t) => t.addRecord(channel));
-		emit("channel_create", channel);
+		event_bus.emit("channel_create", channel);
 		return channel.id;
 	}
 	
@@ -467,7 +427,7 @@ async function create(settings = {}) {
 
 		await database.update((t) => t.removeRecord({ type: "channel", id }));
 	
-		emit("channel_delete", id);
+		event_bus.emit("channel_delete", id);
 		return true;
 	}
 
@@ -485,7 +445,7 @@ async function create(settings = {}) {
 	
 		await database.update((t) => t.removeRecord({ type: "channel", id }));
 	
-		emit("channel_delete", id);
+		event_bus.emit("channel_delete", id);
 		return true;
 	}
 
@@ -539,7 +499,7 @@ async function create(settings = {}) {
 
 		let recipients = await get_online_local_users(channel_id);
 
-		emit("message", {
+		event_bus.emit("message", {
 			message,
 			recipients
 		});
@@ -575,7 +535,7 @@ async function create(settings = {}) {
 
 		let recipients = await get_online_local_users(channel_id);
 
-		emit("message", {
+		event_bus.emit("message", {
 			message,
 			recipients
 		});
@@ -600,7 +560,7 @@ async function create(settings = {}) {
 
 		let recipients = await get_online_local_users(channel.id);
 
-		emit("message_delete", {
+		event_bus.emit("message_delete", {
 			message,
 			recipients
 		});
@@ -615,7 +575,7 @@ async function create(settings = {}) {
 		}
 
 		await database.update((t) => t.removeRecord({ type: "message", id }));
-		emit("message_delete", id);
+		event_bus.emit("message_delete", id);
 	}
 	
 	async function get_messages(channel_id, timestamp, limit = 50) {
@@ -647,7 +607,7 @@ async function create(settings = {}) {
 		}
 	
 		peer_connections[peer_id] = socket;
-		emit("peer_online", peer);
+		event_bus.emit("peer_online", peer);
 		return true;
 	}
 
@@ -882,13 +842,13 @@ async function create(settings = {}) {
 				else if (data.type == "pair_accept" && pending_pair_requests.outgoing.findIndex((request) => request.ip == address && request.port == data.port) != -1) {
 					pending_pair_requests.outgoing = pending_pair_requests.outgoing.filter((request) => request.ip != address && request.port != data.port);
 					add_peer(data.id, data.name, data.address, data.port).then(() => {
-						emit("pair_accept", data);
+						event_bus.emit("pair_accept", data);
 						resolve(data);
 					});
 				}
 				else if (data.type == "pair_reject" && pending_pair_requests.outgoing.findIndex((request) => request.ip == address && request.port == data.port) != -1) {
 					pending_pair_requests.outgoing = pending_pair_requests.outgoing.filter((request) => request.ip != address && request.port != data.port);
-					emit("pair_reject", data);
+					event_bus.emit("pair_reject", data);
 					reject("Pair request rejected");
 				}
 				else if (data.type == "pair_request") {
@@ -900,7 +860,7 @@ async function create(settings = {}) {
 						}
 						else {
 							pending_pair_requests.incoming[data.id] = { name: data.name, address: address, port: data.port };
-							emit("pair_request", data);
+							event_bus.emit("pair_request", data);
 							reject(`Server ${address}:${data.port} is not yet paired, awaiting pair approval from admin to continue`);
 						}
 					});
@@ -927,7 +887,6 @@ async function create(settings = {}) {
 				ws.send(JSON.stringify({
 					type: "handshake_ack"
 				}), () => {
-					console.log("Inform...");
 					inform_peer(data.id);
 				});
 			}).catch((err) => {
@@ -966,7 +925,8 @@ async function create(settings = {}) {
 
 	return {
 		start, stop,
-		on, off,
+		on: event_bus.on, off: event_bus.off,
+
 		get_message, send_message, get_messages, delete_message,
 		create_channel, delete_channel,
 		create_user, get_user, delete_user,

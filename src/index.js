@@ -832,7 +832,8 @@ async function create(settings = {}) {
 		let message = await get_message(id);
 		let channel = await get_channel(message.relationships.channel.data.id);
 
-		if (channel.relationships.peer.data.id != peer_id || channel.attributes.is_private || channel.attributes.admin_only) {
+		if (channel.relationships.peer.data.id != peer_id
+			|| channel.attributes.is_private || channel.attributes.admin_only) {
 			return;
 		}
 

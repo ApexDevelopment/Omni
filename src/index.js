@@ -286,15 +286,24 @@ async function create(settings = {}) {
 	}
 	
 	async function get_online_users(channel_id) {
-		if (!(await get_channel(channel_id))) {
-			return null;
+		let channel = await get_channel(channel_id);
+
+		if (!channel) {
+			return [];
 		}
 	
 		let online_users_in_channel = [];
 	
 		for (let user_id in online_users) {
 			let user = await get_user(user_id);
-			if (user.attributes.admin || !(await get_channel(channel_id)).attributes.admin_only) {
+			
+			// Don't allow remote users to see private channels
+			if (user.relationships.peer.data.id != this_server.id && channel.attributes.is_private) {
+				continue;
+			}
+
+			// Don't allow non-admins to see admin-only channels
+			if (user.attributes.admin || !channel.attributes.admin_only) {
 				online_users_in_channel.push(user);
 			}
 		}
@@ -303,7 +312,9 @@ async function create(settings = {}) {
 	}
 	
 	async function get_online_local_users(channel_id) {
-		if (!(await get_channel(channel_id))) {
+		let channel = await get_channel(channel_id);
+
+		if (!channel) {
 			return null;
 		}
 	
@@ -311,7 +322,7 @@ async function create(settings = {}) {
 	
 		for (let user_id in online_users) {
 			let user = await get_user(user_id);
-			if (user.relationships.peer.data.id == this_server.id && (user.attributes.admin || !(await get_channel(channel_id)).attributes.admin_only)) {
+			if (user.relationships.peer.data.id == this_server.id && (user.attributes.admin || !channel.attributes.admin_only)) {
 				online_local_users.push(user);
 			}
 		}
@@ -320,7 +331,9 @@ async function create(settings = {}) {
 	}
 	
 	async function get_online_remote_users(channel_id) {
-		if (!get_channel(channel_id)) {
+		let channel = get_channel(channel_id);
+
+		if (!channel || channel.attributes.is_private) {
 			return null;
 		}
 		
@@ -328,7 +341,7 @@ async function create(settings = {}) {
 	
 		for (let user_id in online_users) {
 			let user = await get_user(user_id);
-			if (user.relationships.peer.data.id != this_server.id && (user.attributes.admin || !(await get_channel(channel_id)).attributes.admin_only)) {
+			if (user.relationships.peer.data.id != this_server.id && (user.attributes.admin || !channel.attributes.admin_only)) {
 				online_remote_users.push(user);
 			}
 		}
@@ -475,6 +488,10 @@ async function create(settings = {}) {
 		emit("channel_delete", id);
 		return true;
 	}
+
+	async function get_message(id) {
+		return await database.query((q) => q.findRecord({ type: "message", id }));
+	}
 	
 	async function send_message(user_id, channel_id, content) {
 		let user = await get_user(user_id);
@@ -519,7 +536,14 @@ async function create(settings = {}) {
 		}
 	
 		await database.update((t) => t.addRecord(message));
-		emit("message", message);
+
+		let recipients = await get_online_local_users(channel_id);
+
+		emit("message", {
+			message,
+			recipients
+		});
+		
 		return message.id;
 	}
 
@@ -548,7 +572,14 @@ async function create(settings = {}) {
 		}
 
 		await database.update((t) => t.addRecord(message));
-		emit("message", message);
+
+		let recipients = await get_online_local_users(channel_id);
+
+		emit("message", {
+			message,
+			recipients
+		});
+
 		return message.id;
 	}
 	
@@ -567,7 +598,12 @@ async function create(settings = {}) {
 			}
 		}
 
-		emit("message_delete", id);
+		let recipients = await get_online_local_users(channel.id);
+
+		emit("message_delete", {
+			message,
+			recipients
+		});
 	}
 
 	async function delete_remote_message(id, peer_id) {
@@ -931,7 +967,7 @@ async function create(settings = {}) {
 	return {
 		start, stop,
 		on, off,
-		send_message, get_messages, delete_message,
+		get_message, send_message, get_messages, delete_message,
 		create_channel, delete_channel,
 		create_user, get_user, delete_user,
 		login_user, logout_user,

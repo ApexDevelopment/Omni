@@ -4,21 +4,41 @@ const { v4: uuidv4 } = require("uuid");
 const { MemorySource } = require("@orbit/memory");
 const { WebSocket, WebSocketServer } = require("ws");
 const { JSONAPISource } = require("@orbit/jsonapi");
-const { Coordinator, RequestStrategy, SyncStrategy } = require("@orbit/coordinator");
+const {
+	Coordinator,
+	RequestStrategy,
+	SyncStrategy
+} = require("@orbit/coordinator");
 
 const { EventBus } = require("./events");
 const schema = require("./schema");
 
+/**
+ * Creates a new instance of an Omni server.
+ * @param {Object} settings The settings for this Omni server.
+ * @returns {Promise<Object>} The Omni server object, which contains all the
+ *                            functions for interacting with the server.
+ */
 async function create(settings = {}) {
+	// The in-memory database.
 	let database = new MemorySource({ schema });
+	// If applicable, the backing store (i.e. a JSON API server).
 	let backing_store = null;
+
+	// The coordinator, which handles syncing between the in-memory database
+	// and the backing store. This is only used if a backing store is defined.
+	// It is provided by the @orbit/coordinator package.
 	let coordinator = null;
 
+	// An object that contains all the pending pair requests, both incoming and
+	// outgoing.
 	let pending_pair_requests = {
 		incoming: {},
 		outgoing: []
 	};
 
+	// If a backing store is defined, create the coordinator and add the
+	// synchronization strategies.
 	if (settings.json_api) {
 		backing_store = new JSONAPISource({
 			schema,
@@ -30,6 +50,9 @@ async function create(settings = {}) {
 		coordinator = new Coordinator();
 		coordinator.addSource(database);
 		coordinator.addSource(backing_store);
+		// When we query the in-memory database, we want to query the backing
+		// store in the background, and then sync the results to the in-memory
+		// database.
 		coordinator.addStrategy(new RequestStrategy({
 			source: "memory",
 			on: "beforeQuery",
@@ -37,6 +60,8 @@ async function create(settings = {}) {
 			action: "query",
 			blocking: false
 		}));
+		// When we update the in-memory database, we want to update the backing
+		// store in the background.
 		coordinator.addStrategy(new RequestStrategy({
 			source: "memory",
 			on: "beforeUpdate",
@@ -44,6 +69,8 @@ async function create(settings = {}) {
 			action: "update",
 			blocking: false
 		}));
+		// When the backing store is updated, we want to sync the results to
+		// the in-memory database.
 		coordinator.addStrategy(new SyncStrategy({
 			source: "remote",
 			target: "memory",
@@ -52,16 +79,38 @@ async function create(settings = {}) {
 		await coordinator.activate();
 	}
 
+	// The WebSocket server, which is used for peer-to-peer communication.
 	let wss = null;
+	// An object that contains all the peer connections, indexed by their
+	// Omni peer ID.
 	let peer_connections = {};
+	// An object that contains all the users that are currently online, indexed
+	// by their Omni user ID. The associated value is a boolean.
 	let online_users = {};
+	// The event bus, which is mainly used for sending events to whatever
+	// application is using Omni.
 	let event_bus = new EventBus();
 	
+	// The server's own information.
 	let this_server = null;
+	// The server's configuration. This is normally loaded from a config.json
+	// file.
 	let config = null;
 	
+	/**
+	 * Creates a new Omni server Orbit record. Must be called before any other
+	 * functions.
+	 * @param {string} id This server's ID.
+	 * @param {string} name This server's friendly name.
+	 * @param {string} address This server's IP address.
+	 * @param {number} port The port that this server is listening for peers on.
+	 * @private
+	 */
 	function instantiate_server_information(id, name, address, port) {
-		this_server = database.cache.query((q) => q.findRecord({ type: "peer", id }));
+		this_server = database.cache.query((q) =>
+			q.findRecord({ type: "peer", id })
+		);
+
 		if (!this_server) {
 			this_server = {
 				type: "peer",
@@ -81,17 +130,29 @@ async function create(settings = {}) {
 		}
 		else {
 			if (this_server.attributes.name !== name) {
-				database.update((t) => t.replaceAttribute(this_server, "name", name));
+				database.update((t) =>
+					t.replaceAttribute(this_server, "name", name)
+				);
 			}
 			if (this_server.attributes.address !== address) {
-				database.update((t) => t.replaceAttribute(this_server, "address", address));
+				database.update((t) =>
+					t.replaceAttribute(this_server, "address", address)
+				);
 			}
 			if (this_server.attributes.port !== port) {
-				database.update((t) => t.replaceAttribute(this_server, "port", port));
+				database.update((t) =>
+					t.replaceAttribute(this_server, "port", port)
+				);
 			}
 		}
 	}
 	
+	/**
+	 * Finds a user by their username.
+	 * @param {string} username The username to search for.
+	 * @returns {Object|null} The user record, or null if no user was found.
+	 * @private
+	 */
 	function find_user_by_username(username) {
 		let users = database.cache.query((q) =>
 			q
@@ -107,6 +168,13 @@ async function create(settings = {}) {
 		}
 	}
 	
+	/**
+	 * Creates a new local user.
+	 * @param {string} username The username of the user to create.
+	 * @param {boolean} admin Whether or not the user should be an admin.
+	 * @returns Promise<string|null> The ID of the created user, or null if the
+	 *          user already exists.
+	 */
 	async function create_user(username, admin = false) {
 		if (find_user_by_username(username) != null) {
 			return null;
@@ -128,6 +196,15 @@ async function create(settings = {}) {
 		return id;
 	}
 
+	/**
+	 * Creates a new user from a remote peer.
+	 * @param {string} username The name of the user to create.
+	 * @param {string} id The user's ID.
+	 * @param {string} peer_id The ID of the peer that the user is on.
+	 * @returns Promise<string|null> The ID of the created user, or null if the
+	 *          user already exists.
+	 * @private
+	 */
 	async function create_remote_user(username, id, peer_id) {
 		/*if (find_user_by_username(username) != null) {
 			return null;
@@ -147,14 +224,37 @@ async function create(settings = {}) {
 		return id;
 	}
 	
+	/**
+	 * Deletes a user from this Omni server.
+	 * @param {string} id The ID of the user to delete.
+	 */
 	async function delete_user(id) {
 		await database.update((t) => t.removeRecord({ type: "user", id }));
+
+		// Inform peers of deletion.
+		for (let peer_id in peer_connections) {
+			let socket = peer_connections[peer_id];
+			socket.send(JSON.stringify({
+				type: "delete_user",
+				id: id
+			}));
+		}
 	}
 	
+	/**
+	 * Gets a user from this Omni server by their ID.
+	 * @param {string} id The ID of the user to get.
+	 * @returns {Promise<Object|null>} The user record, or null if no user was found.
+	 */
 	async function get_user(id) {
 		return await database.query((q) => q.findRecord({ type: "user", id }));
 	}
 	
+	/**
+	 * Logs in a user.
+	 * @param {string} id The ID of the user to login.
+	 * @returns {Promise<boolean>} Whether or not the user was successfully logged in.
+	 */
 	async function login_user(id) {
 		let user = await get_user(id);
 	
@@ -162,7 +262,7 @@ async function create(settings = {}) {
 			return false;
 		}
 
-		// Inform peers of login
+		// Inform peers of login.
 		if (user.relationships.peer.data.id == this_server.id) {
 			for (let peer_id in peer_connections) {
 				let socket = peer_connections[peer_id];
@@ -178,6 +278,11 @@ async function create(settings = {}) {
 		return true;
 	}
 	
+	/**
+	 * Logs a user out.
+	 * @param {string} id The ID of the user to logout.
+	 * @returns {Promise<boolean>} Whether or not the user was successfully logged out.
+	 */
 	async function logout_user(id) {
 		let user = await get_user(id);
 	
@@ -185,7 +290,7 @@ async function create(settings = {}) {
 			return false;
 		}
 
-		// Inform peers of logout
+		// Inform peers of logout.
 		if (user.relationships.peer.data.id == this_server.id) {
 			for (let peer_id in peer_connections) {
 				let socket = peer_connections[peer_id];
@@ -201,10 +306,19 @@ async function create(settings = {}) {
 		return false;
 	}
 	
+	/**
+	 * Gets an array of IDs for the users that are currently online.
+	 * @returns {string[]} An array of all online user IDs.
+	 */
 	function get_all_online_users() {
 		return Object.keys(online_users);
 	}
 
+	/**
+	 * Gets an array of IDs for all users whose accounts were created on this
+	 * server.
+	 * @returns {Promise<string[]>} An array of all local user IDs.
+	 */
 	async function get_all_local_users() {
 		let local_users = [];
 	
@@ -219,6 +333,11 @@ async function create(settings = {}) {
 		return local_users;
 	}
 	
+	/**
+	 * Gets an array of IDs for all users whose accounts were created on this
+	 * server and who are currently online.
+	 * @returns {Promise<string[]>} An array of all online local user IDs.
+	 */
 	async function get_all_online_local_users() {
 		let online_local_users = [];
 	
@@ -232,6 +351,11 @@ async function create(settings = {}) {
 		return online_local_users;
 	}
 	
+	/**
+	 * Gets an array of IDs for all users whose accounts were created on a
+	 * remote server and who are currently online.
+	 * @returns {Promise<string[]>} An array of all online remote user IDs.
+	 */
 	async function get_all_online_remote_users() {
 		let online_remote_users = [];
 	
@@ -245,6 +369,12 @@ async function create(settings = {}) {
 		return online_remote_users;
 	}
 	
+	/**
+	 * Gets an array of IDs for all users who are currently online in a given
+	 * channel. Potentially includes users from remote servers.
+	 * @param {string} channel_id The ID of the channel to get online users for.
+	 * @returns {Promise<string[]>} An array of all online users in the channel.
+	 */
 	async function get_online_users(channel_id) {
 		let channel = await get_channel(channel_id);
 
@@ -257,12 +387,12 @@ async function create(settings = {}) {
 		for (let user_id in online_users) {
 			let user = await get_user(user_id);
 			
-			// Don't allow remote users to see private channels
+			// Don't allow remote users to see private channels.
 			if (user.relationships.peer.data.id != this_server.id && channel.attributes.is_private) {
 				continue;
 			}
 
-			// Don't allow non-admins to see admin-only channels
+			// Don't allow non-admins to see admin-only channels.
 			if (user.attributes.admin || !channel.attributes.admin_only) {
 				online_users_in_channel.push(user);
 			}
@@ -271,6 +401,12 @@ async function create(settings = {}) {
 		return online_users_in_channel;
 	}
 	
+	/**
+	 * Gets an array of IDs for all users whose accounts were created on this
+	 * server and who are currently online in a given channel.
+	 * @param {string} channel_id The ID of the channel to get online users for.
+	 * @returns {Promise<string[]>} An array of all online local users in the channel.
+	 */
 	async function get_online_local_users(channel_id) {
 		let channel = await get_channel(channel_id);
 
@@ -282,7 +418,8 @@ async function create(settings = {}) {
 	
 		for (let user_id in online_users) {
 			let user = await get_user(user_id);
-			if (user.relationships.peer.data.id == this_server.id && (user.attributes.admin || !channel.attributes.admin_only)) {
+			if (user.relationships.peer.data.id == this_server.id
+				&& (user.attributes.admin || !channel.attributes.admin_only)) {
 				online_local_users.push(user);
 			}
 		}
@@ -290,6 +427,12 @@ async function create(settings = {}) {
 		return online_local_users;
 	}
 	
+	/**
+	 * Gets an array of IDs for all users whose accounts were created on a
+	 * remote server and who are currently online in a given channel.
+	 * @param {string} channel_id The ID of the channel to get online users for.
+	 * @returns {Promise<string[]>} An array of all online remote users in the channel.
+	 */
 	async function get_online_remote_users(channel_id) {
 		let channel = get_channel(channel_id);
 
@@ -301,7 +444,8 @@ async function create(settings = {}) {
 	
 		for (let user_id in online_users) {
 			let user = await get_user(user_id);
-			if (user.relationships.peer.data.id != this_server.id && (user.attributes.admin || !channel.attributes.admin_only)) {
+			if (user.relationships.peer.data.id != this_server.id
+				&& (user.attributes.admin || !channel.attributes.admin_only)) {
 				online_remote_users.push(user);
 			}
 		}
@@ -309,29 +453,66 @@ async function create(settings = {}) {
 		return online_remote_users;
 	}
 	
+	/**
+	 * Gets an array of all channels in the database, including remote channels.
+	 * @returns {Promise<Object[]>} An array of all channels in the database,
+	 *                              including remote channels, sorted by
+	 *                              creation time.
+	 */
 	async function get_all_channels() {
-		return (await database.query((q) => q.findRecords("channel"))).sort((a, b) => {
-			// Sort by creation time
-			return a.attributes.timestamp - b.attributes.timestamp;
-		});
+		return (await database.query((q) => q.findRecords("channel")))
+			.sort((a, b) => {
+				// Sort by creation time.
+				return a.attributes.timestamp - b.attributes.timestamp;
+			}
+		);
 	}
 	
+	/**
+	 * Gets an array of all channels in the database that were created on this
+	 * server.
+	 * @returns {Promise<Object[]>} An array of all local channels in the
+	 *                              database, sorted by creation time.
+	 */
 	async function get_all_local_channels() {
 		return (await database.query((q) =>
 			q
 				.findRecords("channel")
-				.filter({ relation: "peer", record: { type: "peer", id: this_server.id } })
+				.filter({
+					relation: "peer",
+					record: { type: "peer", id: this_server.id }
+				})
 		)).sort((a, b) => {
 			return a.attributes.timestamp - b.attributes.timestamp;
 		});
 	}
 	
+	/**
+	 * Get a channel by its ID.
+	 * @param {string} id The ID of the channel to get.
+	 * @returns {Promise<Object|null>} The channel with the given ID, or null if
+	 *                                 no such channel exists.
+	 */
 	async function get_channel(id) {
-		return await database.query((q) => q.findRecord({ type: "channel", id }));
+		return await database.query((q) =>
+			q.findRecord({ type: "channel", id })
+		);
 	}
 	
+	/**
+	 * Get a channel by its name.
+	 * @param {string} name The name of the channel to find.
+	 * @returns {Promise<Object|null>} The channel with the given name, or null
+	 *                                 if no such channel exists.
+	 * @private
+	 */
 	async function find_channel_by_name(name) {
-		let channels = await database.query((q) => q.findRecords("channel").filter({ attribute: "name", value: name }));
+		let channels = await database.query((q) =>
+			q
+				.findRecords("channel")
+				.filter({ attribute: "name", value: name })
+		);
+
 		if (channels && channels.length > 0) {
 			return channels[0];
 		}
@@ -340,6 +521,16 @@ async function create(settings = {}) {
 		}
 	}
 	
+	/**
+	 * Creates a new channel.
+	 * @param {string} name The name of the channel to create.
+	 * @param {boolean} admin_only Whether the channel is admin-only.
+	 * @param {boolean} is_private Whether the channel is visible to remote
+	 *                             users.
+	 * @returns {Promise<string|null>} The ID of the newly-created channel, or
+	 *                                 null if a channel with the given name
+	 *                                 already exists.
+	 */
 	async function create_channel(name, admin_only = false, is_private = false) {
 		if (await find_channel_by_name(name)) {
 			return null;
@@ -359,8 +550,11 @@ async function create(settings = {}) {
 			}
 		}
 
-		if (!is_private) {
-			// Tell peers about new channel
+		// TODO: Still need to decide whether admin-only channels should be
+		// visible to remote users (perhaps if the user is an admin on the
+		// remote server?).
+		if (!is_private && !admin_only) {
+			// Tell peers about the new channel.
 			for (let peer_id in peer_connections) {
 				let socket = peer_connections[peer_id];
 				socket.send(JSON.stringify({
@@ -377,8 +571,19 @@ async function create(settings = {}) {
 		return channel.id;
 	}
 	
+	/**
+	 * Creates a new channel that was created on a remote server.
+	 * @param {string} name The name of the channel to create.
+	 * @param {number} timestamp The creation time of the channel.
+	 * @param {string} channel_id The ID of the channel to create.
+	 * @param {string} peer_id The ID of the peer that created the channel.
+	 * @returns {Promise<string|null>} The ID of the newly-created channel, or
+	 *                                 null if a channel with the given name
+	 *                                 already exists.
+	 * @private
+	 */
 	async function create_remote_channel(name, timestamp, channel_id, peer_id) {
-		// Check if channel exists first
+		// Check if channel exists first.
 		if (await get_channel(channel_id)) {
 			return null;
 		}
@@ -402,6 +607,11 @@ async function create(settings = {}) {
 		return channel.id;
 	}
 	
+	/**
+	 * Deletes a channel.
+	 * @param {string} id The ID of the channel to delete.
+	 * @returns {Promise<boolean>} Whether the channel was deleted.
+	 */
 	async function delete_channel(id) {
 		let channel = await get_channel(id);
 	
@@ -431,6 +641,12 @@ async function create(settings = {}) {
 		return true;
 	}
 
+	/**
+	 * Deletes a channel that was created on a remote server.
+	 * @param {string} id The ID of the channel to delete.
+	 * @returns {Promise<boolean>} Whether the channel was deleted.
+	 * @private
+	 */
 	async function delete_remote_channel(id) {
 		let channel = await get_channel(id);
 	
@@ -449,18 +665,35 @@ async function create(settings = {}) {
 		return true;
 	}
 
+	/**
+	 * Gets a message by its ID.
+	 * @param {string} id The ID of the message to get.
+	 * @returns {Promise<Object|null>} The message, or null if it doesn't exist.
+	 */
 	async function get_message(id) {
 		return await database.query((q) => q.findRecord({ type: "message", id }));
 	}
 	
+	/**
+	 * Sends a message to a channel from a user.
+	 * @param {string} user_id The ID of the user who sent the message.
+	 * @param {string} channel_id The ID of the channel to send the message to.
+	 * @param {string} content The content of the message.
+	 * @returns {Promise<Object|null>} The message, or null if the channel or
+	 *                                 user doesn't exist, or if the user does
+	 *                                 not have permission to send messages to
+	 *                                 the channel.
+	 */
 	async function send_message(user_id, channel_id, content) {
 		let user = await get_user(user_id);
 		let channel = await get_channel(channel_id);
 	
+		// Make sure the channel exists and that the user is logged in
 		if (!channel || !online_users[user_id]) {
 			return null;
 		}
 
+		// Make sure the user is allowed to send messages to this channel
 		if (channel.attributes.admin_only && !user.attributes.admin) {
 			return null;
 		}
@@ -478,12 +711,16 @@ async function create(settings = {}) {
 			}
 		};
 
-		// If this message was sent from a local user we need to tell peers about it
-		if (user.relationships.peer.data.id == this_server.id && !channel.attributes.is_private) {
+		// If this message was sent from a local user we need to tell peers
+		// about it
+		if (user.relationships.peer.data.id == this_server.id
+			&& !channel.attributes.is_private) {
 			for (let peer_id in peer_connections) {
-				// Only send to peers that we know can see the channel
-				if (channel.relationships.peer.data.id == this_server.id || channel.relationships.peer.data.id == peer_id) {
+				// Only send to peers that we know can see the channel.
+				if (channel.relationships.peer.data.id == this_server.id
+					|| channel.relationships.peer.data.id == peer_id) {
 					let socket = peer_connections[peer_id];
+
 					socket.send(JSON.stringify({
 						type: "send_message",
 						user_id,
@@ -507,6 +744,19 @@ async function create(settings = {}) {
 		return message.id;
 	}
 
+	/**
+	 * Sends a message to a channel from a user on a remote server.
+	 * @param {string} user_id The ID of the user who sent the message.
+	 * @param {string} channel_id The ID of the channel to send the message to.
+	 * @param {string} content The content of the message.
+	 * @param {string} message_id The ID of the message.
+	 * @param {number} timestamp The time the message was sent.
+	 * @returns {Promise<Object|null>} The message, or null if the channel or
+	 *                                 user doesn't exist, or if the user does
+	 *                                 not have permission to send messages to
+	 *                                 the channel.
+	 * @private
+	 */
 	async function send_remote_message(user_id, channel_id, content, message_id, timestamp) {
 		let channel = await get_channel(channel_id);
 
@@ -543,6 +793,10 @@ async function create(settings = {}) {
 		return message.id;
 	}
 	
+	/**
+	 * Deletes a message.
+	 * @param {string} id The ID of the message to delete.
+	 */
 	async function delete_message(id) {
 		let message = await get_message(id);
 		let channel = await get_channel(message.relationships.channel.data.id);
@@ -566,6 +820,14 @@ async function create(settings = {}) {
 		});
 	}
 
+	/**
+	 * Deletes a message sent from a remote server.
+	 * @param {string} id The ID of the message to delete.
+	 * @param {string} peer_id The ID of the peer that sent the message.
+	 * @returns {Promise<void>} A promise that resolves when the message has
+	 *                          been deleted.
+	 * @private
+	 */
 	async function delete_remote_message(id, peer_id) {
 		let message = await get_message(id);
 		let channel = await get_channel(message.relationships.channel.data.id);
@@ -578,6 +840,13 @@ async function create(settings = {}) {
 		event_bus.emit("message_delete", id);
 	}
 	
+	/**
+	 * Gets messages from a channel.
+	 * @param {string} channel_id The ID of the channel to get messages from.
+	 * @param {number} timestamp The timestamp to get messages before.
+	 * @param {number} limit The maximum number of messages to get.
+	 * @returns {Promise<Array<Object>>} An array of messages.
+	 */
 	async function get_messages(channel_id, timestamp, limit = 50) {
 		let channel = await get_channel(channel_id);
 	
@@ -588,18 +857,34 @@ async function create(settings = {}) {
 		return (await database.query((q) =>
 			q
 				.findRecords("message")
-				.filter(
-					{ relation: "channel", record: { type: "channel", id: channel_id }})
+				.filter({
+					relation: "channel",
+					record: { type: "channel", id: channel_id }
+				})
 		))
-			.filter((message) => message.attributes.timestamp < timestamp) // Annoyingly, I couldn't get this to work in the query
+			// Annoyingly, I couldn't get this filter to work in the query.
+			.filter((message) => message.attributes.timestamp < timestamp)
 			.sort((a, b) => a.attributes.timestamp - b.attributes.timestamp)
 			.slice(0, limit);
 	}
 
+	/**
+	 * Gets a peer.
+	 * @param {string} id The ID of the peer.
+	 * @returns {Promise<Object|null>} The peer, or null if it doesn't exist.
+	 */
 	async function get_peer(id) {
 		return await database.query((q) => q.findRecord({ type: "peer", id }));
 	}
 	
+	/**
+	 * Alerts the server that a peer is online.
+	 * @param {string} peer_id The ID of the peer.
+	 * @param {WebSocket} socket The socket that the peer is connected on.
+	 * @returns {Promise<boolean>} Whether the peer was successfully marked as
+	 *                             online.
+	 * @private
+	 */
 	async function peer_online(peer_id, socket) {
 		let peer = await get_peer(peer_id);
 		if (!peer) {
@@ -611,6 +896,16 @@ async function create(settings = {}) {
 		return true;
 	}
 
+	/**
+	 * Adds a peer to the database.
+	 * @param {string} id The ID of the peer.
+	 * @param {string} name The name of the peer.
+	 * @param {string} address The IP address of the peer.
+	 * @param {number} port The port of the peer.
+	 * @returns {Promise<void>} A promise that resolves when the peer has been
+	 *                          added.
+	 * @private
+	 */
 	async function add_peer(id, name, address, port) {
 		let peer = {
 			type: "peer",
@@ -629,25 +924,31 @@ async function create(settings = {}) {
 		await database.update((t) => t.addRecord(peer));
 	}
 	
+	/**
+	 * Starts listening for events from a peer. This is used for synchronization
+	 * of data between servers.
+	 * @param {string} peer_id The ID of the peer.
+	 * @param {WebSocket} websocket The websocket that the peer is connected on.
+	 * @private
+	 */
 	function set_up_handlers(peer_id, websocket) {
+		// Wait for messages from the peer.
 		websocket.on("message", async (message) => {
 			let data = JSON.parse(message);
 	
 			switch (data.type) {
 				case "login": {
 					// Should be fine?
-					let success = await login_user(data.id);
-					console.log(`Login user ${data.id} from peer ${peer_id}: ${success}`);
+					login_user(data.id);
 					break;
 				}
 				case "logout": {
 					// Should be fine?
-					let success = await logout_user(data.id);
-					console.log(`Logout user ${data.id} from peer ${peer_id}: ${success}`);
+					logout_user(data.id);
 					break;
 				}
 				case "create_user": {
-					await create_remote_user(data.username, data.id, peer_id);
+					create_remote_user(data.username, data.id, peer_id);
 					break;
 				}
 				case "delete_user": {
@@ -657,8 +958,14 @@ async function create(settings = {}) {
 					break;
 				}
 				case "channel_create": {
-					let new_channel_id = await create_remote_channel(data.name, data.timestamp, data.id, peer_id);
-					console.log(`Created channel ${new_channel_id} from peer ${peer_id}`);
+					create_remote_channel(
+						data.name,
+						data.timestamp,
+						data.id,
+						peer_id
+					);
+
+					console.log(`Created channel ${data.id} from peer ${peer_id}`);
 					break;
 				}
 				case "channel_delete": {
@@ -671,16 +978,28 @@ async function create(settings = {}) {
 					break;
 				}
 				case "send_message": {
-					let result = await send_remote_message(data.user_id, data.channel_id, data.content, data.message_id, data.timestamp);
-					console.log(`Received message from peer ${peer_id}: ${data.content} (success: ${result}})`);
+					send_remote_message(
+						data.user_id,
+						data.channel_id,
+						data.content,
+						data.message_id,
+						data.timestamp
+					);
 					break;
 				}
 				case "delete_message": {
 					delete_remote_message(data.id, peer_id);
 					break;
 				}
+				// TODO: Currently unused. Should be used to sync message
+				// backlog.
 				case "get_messages": {
-					let messages = await get_messages(data.channel_id, data.timestamp, data.limit);
+					let messages = await get_messages(
+						data.channel_id,
+						data.timestamp,
+						data.limit
+					);
+
 					websocket.send(JSON.stringify({
 						type: "get_messages_success",
 						messages: messages
@@ -688,15 +1007,22 @@ async function create(settings = {}) {
 					break;
 				}
 				default:
-					console.log("Unknown message type: " + data.type);
+					console.log(`Unknown message type ${data.type} from peer ${peer_id}`);
 			}
 		});
 	}
 	
+	/**
+	 * Sends a pair request to a peer.
+	 * @param {string} ip The IP address of the peer to pair with.
+	 * @param {number} port The port of the peer to pair with.
+	 * @returns {boolean} Whether the pair request was sent.
+	 */
 	function send_pair_request(ip, port) {
 		ip = ip6addr.parse(ip).toString({ format: "v4" });
 
-		if (ip == this_server.attributes.address && port == this_server.attributes.port) {
+		if (ip == this_server.attributes.address
+			&& port == this_server.attributes.port) {
 			return false;
 		}
 
@@ -724,6 +1050,12 @@ async function create(settings = {}) {
 		return true;
 	}
 
+	/**
+	 * Tells a peer about all the channels and users on this server.
+	 * @param {string} id The ID of the peer to inform.
+	 * @returns {Promise<boolean>} Whether the peer was informed.
+	 * @private
+	 */
 	async function inform_peer(id) {
 		if (!peer_connections[id]) return false;
 		let socket = peer_connections[id];
@@ -755,8 +1087,16 @@ async function create(settings = {}) {
 				id: user_id
 			}));
 		}
+
+		return true;
 	}
 
+	/**
+	 * Responds to a pair request.
+	 * @param {string} id The ID of the peer to respond to.
+	 * @param {boolean} accepted Whether the pair request was accepted.
+	 * @returns {Promise<boolean>} Whether the pair request was responded to.
+	 */
 	async function respond_to_pair_request(id, accepted) {
 		let pair_request = pending_pair_requests.incoming[id];
 		
@@ -794,10 +1134,22 @@ async function create(settings = {}) {
 		return true;
 	}
 	
+	/**
+	 * Checks whether a peer exists.
+	 * @param {string} id The ID of the peer to check.
+	 * @returns {Promise<boolean>} Whether the peer exists.
+	 * @private
+	 */
 	async function has_peer(id) {
 		return (await database.query((q) => q.findRecords("peer").filter({ attribute: "id", value: id }))).length > 0;
 	}
 
+	/**
+	 * Try to connect to a peer.
+	 * @param {string} peer The ID of the peer to connect to.
+	 * @returns {boolean} Whether a connection attempt was made.
+	 * @private
+	 */
 	function connect_to_peer(peer) {
 		if (peer.id == this_server.id) {
 			return false;
@@ -829,6 +1181,13 @@ async function create(settings = {}) {
 		return true;
 	}
 	
+	/**
+	 * Waits for a handshake or pair request from a socket.
+	 * @param {string} socket The socket to await a handshake or pair request
+	 *                        on.
+	 * @returns {Promise<Object|string>} The handshake or pair request data.
+	 * @private
+	 */
 	function await_handshake_or_pair_request(socket) {
 		return new Promise((resolve, reject) => {
 			socket.on("message", (message) => {
@@ -872,36 +1231,50 @@ async function create(settings = {}) {
 		});
 	}
 	
+	/**
+	 * Starts the Omni server.
+	 * @param {string} config_path The path to the config file.
+	 */
 	function start(config_path) {
 		config = JSON.parse(fs.readFileSync(config_path, "utf8"));
 		instantiate_server_information(config.server_id, config.server_name, "localhost", config.server_port);
 		wss = new WebSocketServer({ port: config.server_port });
 	
+		// Wait for new connections to the server.
 		wss.on("connection", (ws, req) => {
 			console.log(`New connection from ${req.socket.remoteAddress}`);
+			// Wait for the handshake message...
 			await_handshake_or_pair_request(ws).then((data) => {
 				console.log(`Handshake from ${data.id}`);
+				// If we get a valid handshake, mark the peer as online and set
+				// up handlers.
 				peer_online(data.id, ws);
 				set_up_handlers(data.id, ws);
 
+				// Send a handshake acknowledgement.
 				ws.send(JSON.stringify({
 					type: "handshake_ack"
 				}), () => {
 					inform_peer(data.id);
 				});
 			}).catch((err) => {
+				// If we get an error, close the connection. This can also
+				// happen if the peer is not paired. In that case, we receive
+				// a pair request.
 				console.log("Peer handshake error:", err);
 				ws.close();
 			});
 		});
 	
+		// Log errors in connection.
 		wss.on("error", (err) => {
 			console.log(`Error in connection: ${err}`);
 		});
 	
-		// Connect to all peers in Orbit database
+		// Connect to all peers in Orbit database.
 		database.query((q) => q.findRecords("peer")).then((peers) => {
 			peers.forEach((peer) => {
+				// Don't connect to self
 				if (peer.id != this_server.id) {
 					connect_to_peer(peer);
 				}
@@ -909,6 +1282,9 @@ async function create(settings = {}) {
 		});
 	}
 	
+	/**
+	 * Stops the Omni server, closing all connections.
+	 */
 	function stop() {
 		if (wss != null) {
 			wss.close();

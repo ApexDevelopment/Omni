@@ -74,8 +74,19 @@ test("Omni prevents duplicate channel names", async () => {
 	expect(await omni_server1.create_channel("test")).toBe(null);
 });
 
-test("Omni successfully logs in a user", async () => {
-	expect(await omni_server1.login_user(user_id)).toBe(true);
+test("Omni successfully logs in a user", (done) => {
+	let handler;
+	handler = omni_server1.on("user_online", (data) => {
+		expect(data).toBeDefined();
+		expect(data.id).toBe(user_id);
+
+		omni_server1.off("user_online", handler);
+		done();
+	});
+
+	omni_server1.login_user(user_id).then((success) => {
+		expect(success).toBe(true);	
+	});
 });
 
 test("Omni prevents logging in with bogus ID", async () => {
@@ -96,6 +107,18 @@ test("Omni successfully sends a message", (done) => {
 	omni_server1.send_message(user_id, channel_id, "test").then((message_id) => {
 		expect(typeof(message_id)).toBe("string");
 	});
+});
+
+test("Omni successfully retrieves messages", async () => {
+	let messages = await omni_server1.get_messages(channel_id, Date.now(), 1);
+	expect(messages).toBeDefined();
+	expect(messages.length).toBe(1);
+	expect(messages[0].attributes.content).toBe("test");
+});
+
+test("Omni prevents retrieving messages from a bogus channel", async () => {
+	let messages = await omni_server1.get_messages("bogus", Date.now(), 1);
+	expect(messages).toBe(null);
 });
 
 test("Omni successfully deletes a channel", async () => {

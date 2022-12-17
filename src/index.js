@@ -180,40 +180,46 @@ async function create(settings = {}) {
 			return null;
 		}
 	
-		const id = uuidv4();
-	
-		let user = {
-			type: "user",
-			id,
-			attributes: { username, admin },
-			relationships: {
-				peer: { data: { type: "peer", id: this_server.id } }
+		const id = await create_user_internal(
+			uuidv4(),
+			username,
+			admin,
+			this_server.id
+		);
+
+		if (id != null) {
+			for (let peer_id in peer_connections) {
+				let socket = peer_connections[peer_id];
+				socket.send(JSON.stringify({
+					type: "create_user",
+					id: id,
+					username: username
+				}));
 			}
-		};
-	
-		await database.update((t) => t.addRecord(user));
-		event_bus.emit("create_user", user);
+		}
+
 		return id;
 	}
 
 	/**
-	 * Creates a new user from a remote peer.
-	 * @param {string} username The name of the user to create.
+	 * Creates a new user from any peer.
 	 * @param {string} id The user's ID.
+	 * @param {string} username The name of the user to create.
+	 * @param {boolean} admin Whether or not the user should be an admin.
 	 * @param {string} peer_id The ID of the peer that the user is on.
 	 * @returns Promise<string|null> The ID of the created user, or null if the
 	 *          user already exists.
 	 * @private
 	 */
-	async function create_remote_user(username, id, peer_id) {
-		/*if (find_user_by_username(username) != null) {
+	async function create_user_internal(id, username, admin, peer_id) {
+		if (await get_user(id) != null) {
 			return null;
-		}*/
+		}
 	
 		let user = {
 			type: "user",
 			id,
-			attributes: { username, admin: false },
+			attributes: { username, admin },
 			relationships: {
 				peer: { data: { type: "peer", id: peer_id } }
 			}
@@ -227,18 +233,41 @@ async function create(settings = {}) {
 	/**
 	 * Deletes a user from this Omni server.
 	 * @param {string} id The ID of the user to delete.
+	 * @returns Promise<boolean> Whether or not the user was deleted.
 	 */
 	async function delete_user(id) {
-		await database.update((t) => t.removeRecord({ type: "user", id }));
+		const success = await delete_user_internal(id, this_server.id);
 
-		// Inform peers of deletion.
-		for (let peer_id in peer_connections) {
-			let socket = peer_connections[peer_id];
-			socket.send(JSON.stringify({
-				type: "delete_user",
-				id: id
-			}));
+		if (success) {
+			// Inform peers of deletion.
+			for (let peer_id in peer_connections) {
+				let socket = peer_connections[peer_id];
+				socket.send(JSON.stringify({
+					type: "delete_user",
+					id: id
+				}));
+			}
 		}
+
+		return success;
+	}
+
+	/**
+	 * Deletes a user from any peer.
+	 * @param {string} id The ID of the user to delete.
+	 * @param {string} peer_id The ID of the peer that the user is on.
+	 * @returns Promise<boolean> Whether or not the user was deleted.
+	 * @private
+	 */
+	async function delete_user_internal(id, peer_id) {
+		let user = await get_user(id);
+		if (user == null || user.relationships.peer.data.id !== peer_id) {
+			return false;
+		}
+
+		await database.update((t) => t.removeRecord({ type: "user", id }));
+		event_bus.emit("delete_user", id);
+		return true;
 	}
 	
 	/**
@@ -391,7 +420,8 @@ async function create(settings = {}) {
 			let user = await get_user(user_id);
 			
 			// Don't allow remote users to see private channels.
-			if (user.relationships.peer.data.id != this_server.id && channel.attributes.is_private) {
+			if (user.relationships.peer.data.id != this_server.id
+				&& channel.attributes.is_private) {
 				continue;
 			}
 
@@ -408,7 +438,8 @@ async function create(settings = {}) {
 	 * Gets an array of IDs for all users whose accounts were created on this
 	 * server and who are currently online in a given channel.
 	 * @param {string} channel_id The ID of the channel to get online users for.
-	 * @returns {Promise<string[]>} An array of all online local users in the channel.
+	 * @returns {Promise<string[]>} An array of all online local users in the
+	 *                              channel.
 	 */
 	async function get_online_local_users(channel_id) {
 		let channel = await get_channel(channel_id);
@@ -434,7 +465,8 @@ async function create(settings = {}) {
 	 * Gets an array of IDs for all users whose accounts were created on a
 	 * remote server and who are currently online in a given channel.
 	 * @param {string} channel_id The ID of the channel to get online users for.
-	 * @returns {Promise<string[]>} An array of all online remote users in the channel.
+	 * @returns {Promise<string[]>} An array of all online remote users in the
+	 *                              channel.
 	 */
 	async function get_online_remote_users(channel_id) {
 		let channel = await get_channel(channel_id);
@@ -539,72 +571,69 @@ async function create(settings = {}) {
 			return null;
 		}
 	
-		let channel = {
-			type: "channel",
-			id: uuidv4(),
-			attributes: {
-				name,
-				admin_only,
-				is_private,
-				timestamp: Date.now()
-			},
-			relationships: {
-				peer: { data: { type: "peer", id: this_server.id } }
-			}
-		}
+		const timestamp = Date.now();
+		const id = await create_channel_internal(
+			uuidv4(),
+			name,
+			admin_only,
+			is_private,
+			timestamp,
+			this_server.id
+		);
 
 		// TODO: Still need to decide whether admin-only channels should be
 		// visible to remote users (perhaps if the user is an admin on the
 		// remote server?).
-		if (!is_private && !admin_only) {
+		if (id && !is_private && !admin_only) {
 			// Tell peers about the new channel.
 			for (let peer_id in peer_connections) {
 				let socket = peer_connections[peer_id];
 				socket.send(JSON.stringify({
 					type: "channel_create",
-					id: channel.id,
+					id,
 					name,
-					timestamp: channel.attributes.timestamp
+					timestamp
 				}));
 			}
 		}
 
-		await database.update((t) => t.addRecord(channel));
-		event_bus.emit("channel_create", channel);
-		return channel.id;
+		return id;
 	}
 	
 	/**
-	 * Creates a new channel that was created on a remote server.
+	 * Creates a new channel from any peer.
+	 * @param {string} id The ID of the channel to create.
 	 * @param {string} name The name of the channel to create.
+	 * @param {boolean} admin_only Whether the channel is admin-only.
+	 * @param {boolean} is_private Whether the channel is visible to remote
+	 *                             users.
 	 * @param {number} timestamp The creation time of the channel.
-	 * @param {string} channel_id The ID of the channel to create.
 	 * @param {string} peer_id The ID of the peer that created the channel.
 	 * @returns {Promise<string|null>} The ID of the newly-created channel, or
 	 *                                 null if a channel with the given name
 	 *                                 already exists.
 	 * @private
 	 */
-	async function create_remote_channel(name, timestamp, channel_id, peer_id) {
+	async function create_channel_internal(id, name, admin_only, is_private, timestamp, peer_id) {
 		// Check if channel exists first.
-		if (await get_channel(channel_id)) {
+		if (await get_channel(id)) {
 			return null;
 		}
-
+	
 		let channel = {
 			type: "channel",
-			id: channel_id,
+			id,
 			attributes: {
 				name,
-				admin_only: false,
-				is_private: false,
+				admin_only,
+				is_private,
 				timestamp
 			},
 			relationships: {
 				peer: { data: { type: "peer", id: peer_id } }
 			}
 		}
-	
+
 		await database.update((t) => t.addRecord(channel));
 		event_bus.emit("channel_create", channel);
 		return channel.id;
@@ -617,53 +646,59 @@ async function create(settings = {}) {
 	 */
 	async function delete_channel(id) {
 		let channel = await get_channel(id);
-	
-		if (!channel || channel.relationships.peer.data.id != this_server.id) {
+
+		if (!channel) {
 			return false;
 		}
-	
-		// Also delete all associated messages
-		/*await database.update((t) =>
-			t.removeFromRelatedRecords({ type: "channel", id }, "messages", { type: "message", id: null })
-		);*/
-	
-		if (!channel.attributes.is_private) {
-			// Tell peers about channel deletion
-			for (let peer_id in peer_connections) {
-				let socket = peer_connections[peer_id];
-				socket.send(JSON.stringify({
-					type: "channel_delete",
-					id: channel.id
-				}));
+
+		const success = await delete_channel_internal(id, this_server.id);
+
+		if (success) {
+			if (!channel.attributes.is_private
+				&& !channel.attributes.admin_only) {
+				// Tell peers about channel deletion
+				for (let peer_id in peer_connections) {
+					let socket = peer_connections[peer_id];
+					socket.send(JSON.stringify({
+						type: "channel_delete",
+						id: channel.id
+					}));
+				}
 			}
 		}
 
-		await database.update((t) => t.removeRecord({ type: "channel", id }));
-	
-		event_bus.emit("channel_delete", id);
-		return true;
+		return success;
 	}
 
 	/**
-	 * Deletes a channel that was created on a remote server.
+	 * Deletes a channel from any peer.
 	 * @param {string} id The ID of the channel to delete.
-	 * @returns {Promise<boolean>} Whether the channel was deleted.
-	 * @private
+	 * @param {string} peer_id The ID of the peer that created the channel.
+	 * @returns Promise<boolean> Whether the channel was deleted.
 	 */
-	async function delete_remote_channel(id) {
+	async function delete_channel_internal(id, peer_id) {
 		let channel = await get_channel(id);
 	
-		if (!channel || channel.relationships.peer.data.id == this_server.id) {
+		if (!channel || channel.relationships.peer.data.id != peer_id) {
 			return false;
 		}
 	
 		// Also delete all associated messages
-		/*await database.update((t) =>
-			t.removeFromRelatedRecords({ type: "channel", id }, "messages", { type: "message", id: null })
-		);*/
+		// UNTESTED
+		/*let messages = await database.query(
+			q
+				.findRecords("message")
+				.filter({
+					relation: "channel",
+					record: { type: "channel", id: channel_id }
+				})
+		);
+
+		for (let message of messages) {
+			database.update((t) => t.removeRecord({ type: "message", id: message.id }));
+		}*/
 	
 		await database.update((t) => t.removeRecord({ type: "channel", id }));
-	
 		event_bus.emit("channel_delete", id);
 		return true;
 	}
@@ -808,7 +843,9 @@ async function create(settings = {}) {
 		let channel = await get_channel(message.relationships.channel.data.id);
 		await database.update((t) => t.removeRecord({ type: "message", id }));
 
-		if (channel.relationships.peer.data.id == this_server.id && !channel.attributes.is_private && !channel.attributes.admin_only) {
+		if (channel.relationships.peer.data.id == this_server.id
+			&& !channel.attributes.is_private
+			&& !channel.attributes.admin_only) {
 			for (let peer_id in peer_connections) {
 				let socket = peer_connections[peer_id];
 				socket.send(JSON.stringify({
@@ -958,33 +995,32 @@ async function create(settings = {}) {
 					break;
 				}
 				case "create_user": {
-					create_remote_user(data.username, data.id, peer_id);
+					create_user_internal(
+						data.id,
+						data.username,
+						false,
+						peer_id
+					);
 					break;
 				}
 				case "delete_user": {
-					// TODO: Security
-					let success = await delete_user(data.id);
-					console.log(`Delete user ${data.id} from peer ${peer_id}: ${success}`);
+					delete_user_internal(data.id, peer_id);
 					break;
 				}
 				case "channel_create": {
-					create_remote_channel(
-						data.name,
-						data.timestamp,
+					create_channel_internal(
 						data.id,
+						data.name,
+						false,
+						false,
+						data.timestamp,
 						peer_id
 					);
 
-					console.log(`Created channel ${data.id} from peer ${peer_id}`);
 					break;
 				}
 				case "channel_delete": {
-					let channel = await get_channel(data.id);
-
-					if (channel && channel.relationships.peer.data.id == peer_id) {
-						let success = await delete_remote_channel(data.id)
-						console.log(`Delete channel ${data.id} from peer ${peer_id}: ${success}`);
-					}
+					delete_channel_internal(data.id, peer_id);
 					break;
 				}
 				case "send_message": {
@@ -1017,7 +1053,7 @@ async function create(settings = {}) {
 					break;
 				}
 				default:
-					console.log(`Unknown message type ${data.type} from peer ${peer_id}`);
+					console.log(`Unknown message "${data.type}" from peer ${peer_id}`);
 			}
 		});
 	}
@@ -1053,7 +1089,7 @@ async function create(settings = {}) {
 				port: this_server.attributes.port
 			}));
 
-			pending_pair_requests.outgoing.push({ socket: socket, ip: ip, port: port });
+			pending_pair_requests.outgoing.push({ socket, ip, port });
 			socket.close();
 		});
 
@@ -1073,7 +1109,8 @@ async function create(settings = {}) {
 		let users = await get_all_local_users();
 
 		for (let channel of channels) {
-			if (!channel.attributes.admin_only && !channel.attributes.is_private) {
+			if (!channel.attributes.admin_only
+				&& !channel.attributes.is_private) {
 				socket.send(JSON.stringify({
 					type: "channel_create",
 					id: channel.id,
@@ -1247,10 +1284,15 @@ async function create(settings = {}) {
 	 */
 	function start(config_path) {
 		config = JSON.parse(fs.readFileSync(config_path, "utf8"));
-		instantiate_server_information(config.server_id, config.server_name, "localhost", config.server_port);
-		wss = new WebSocketServer({ port: config.server_port });
-	
+		instantiate_server_information(
+			config.server_id,
+			config.server_name,
+			"127.0.0.1",
+			config.server_port
+		);
+
 		// Wait for new connections to the server.
+		wss = new WebSocketServer({ port: config.server_port });
 		wss.on("connection", (ws, req) => {
 			// Wait for the handshake message...
 			await_handshake_or_pair_request(ws).then((data) => {
@@ -1301,8 +1343,10 @@ async function create(settings = {}) {
 
 		// Close all peer connections
 		for (let peer_id in peer_connections) {
-			if (peer_connections[peer_id].readyState == WebSocket.OPEN || peer_connections[peer_id].readyState == WebSocket.CONNECTING) {
-				peer_connections[peer_id].close();
+			let socket = peer_connections[peer_id];
+			if (socket.readyState == WebSocket.OPEN
+				|| socket.readyState == WebSocket.CONNECTING) {
+				socket.close();
 			}
 		}
 	}

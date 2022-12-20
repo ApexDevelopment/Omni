@@ -4,7 +4,7 @@ const { v4: uuidv4 } = require("uuid");
 const { MemorySource } = require("@orbit/memory");
 const { WebSocket, WebSocketServer } = require("ws");
 const { JSONAPISource } = require("@orbit/jsonapi");
-const { IndexedDBSource } = require("@orbit/indexeddb");
+const { LocalStorageSource } = require("@orbit/local-storage");
 const {
 	Coordinator,
 	RequestStrategy,
@@ -87,18 +87,19 @@ async function create(settings = {}) {
 			blocking: false
 		}));
 	}
-	if (settings.indexeddb) {
-		if (global.indexedDB === undefined) {
+	if (settings.localStorage) {
+		if (global.localStorage === undefined) {
 			try {
-				let destructible = new (require("destructible"))("omni");
-				global.indexedDB = require("indexeddb").create(destructible, settings.indexeddb.dir);
+				let LocalStorage = require("node-localstorage").LocalStorage;
+				global.localStorage = LocalStorage(settings.localStorage.dir, settings.localStorage.size)
 			}
 			catch (e) {
-				throw "Please manually install the indexeddb and destructible packages.";
+				console.error(e);
+				throw "Please manually install the node-localstorage package.";
 			}
 		}
 
-		let local_store = new IndexedDBSource({
+		let local_store = new LocalStorageSource({
 			schema,
 			name: "local",
 			namespace: "omni"

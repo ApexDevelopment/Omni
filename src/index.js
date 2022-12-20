@@ -43,7 +43,7 @@ async function create(settings = {}) {
 	// If a backing store is defined, create the coordinator and add the
 	// synchronization strategies.
 	if (settings.json_api) {
-		if (fetch === undefined) {
+		if (global.fetch === undefined) {
 			try {
 				global.fetch = require("node-fetch");
 			}
@@ -88,7 +88,7 @@ async function create(settings = {}) {
 		}));
 	}
 	if (settings.use_indexeddb) {
-		if (indexedDB === undefined) {
+		if (global.indexedDB === undefined) {
 			try {
 				global.indexedDB = require("indexeddb");
 			}

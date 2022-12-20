@@ -87,13 +87,14 @@ async function create(settings = {}) {
 			blocking: false
 		}));
 	}
-	if (settings.use_indexeddb) {
+	if (settings.indexeddb) {
 		if (global.indexedDB === undefined) {
 			try {
-				global.indexedDB = require("indexeddb");
+				let destructible = new (require("destructible"))("omni");
+				global.indexedDB = require("indexeddb").create(destructible, settings.indexeddb.dir);
 			}
 			catch (e) {
-				throw "Please manually install the indexeddb package.";
+				throw "Please manually install the indexeddb and destructible packages.";
 			}
 		}
 

@@ -18,6 +18,7 @@
   "homepage": "https://github.com/Skid-Team-6/Omni#readme",
   "dependencies": {
     "@orbit/coordinator": "^0.17.0",
+    "@orbit/indexeddb": "^0.17.2",
     "@orbit/jsonapi": "^0.17.1",
     "@orbit/memory": "^0.17.2",
     "@orbit/records": "^0.17.0",

@@ -4,6 +4,7 @@ const { v4: uuidv4 } = require("uuid");
 const { MemorySource } = require("@orbit/memory");
 const { WebSocket, WebSocketServer } = require("ws");
 const { JSONAPISource } = require("@orbit/jsonapi");
+const { IndexedDBSource } = require("@orbit/indexeddb");
 const {
 	Coordinator,
 	RequestStrategy,
@@ -21,14 +22,16 @@ const schema = require("./schema");
  */
 async function create(settings = {}) {
 	// The in-memory database.
-	let database = new MemorySource({ schema });
-	// If applicable, the backing store (i.e. a JSON API server).
-	let backing_store = null;
+	let database = new MemorySource({
+		schema,
+		name: "memory"
+	});
 
 	// The coordinator, which handles syncing between the in-memory database
 	// and the backing store. This is only used if a backing store is defined.
 	// It is provided by the @orbit/coordinator package.
-	let coordinator = null;
+	let coordinator = new Coordinator();
+	coordinator.addSource(database);
 
 	// An object that contains all the pending pair requests, both incoming and
 	// outgoing.
@@ -40,15 +43,22 @@ async function create(settings = {}) {
 	// If a backing store is defined, create the coordinator and add the
 	// synchronization strategies.
 	if (settings.json_api) {
-		backing_store = new JSONAPISource({
+		if (fetch === undefined) {
+			try {
+				global.fetch = require("node-fetch");
+			}
+			catch (e) {
+				throw "Please manually install the node-fetch package.";
+			}
+		}
+		
+		let backing_store = new JSONAPISource({
 			schema,
 			name: "remote",
 			host: settings.json_api.host,
 			namespace: settings.json_api.namespace
 		});
 		
-		coordinator = new Coordinator();
-		coordinator.addSource(database);
 		coordinator.addSource(backing_store);
 		// When we query the in-memory database, we want to query the backing
 		// store in the background, and then sync the results to the in-memory
@@ -76,8 +86,33 @@ async function create(settings = {}) {
 			target: "memory",
 			blocking: false
 		}));
-		await coordinator.activate();
 	}
+	if (settings.use_indexeddb) {
+		if (indexedDB === undefined) {
+			try {
+				global.indexedDB = require("indexeddb");
+			}
+			catch (e) {
+				throw "Please manually install the indexeddb package.";
+			}
+		}
+
+		let local_store = new IndexedDBSource({
+			schema,
+			name: "local",
+			namespace: "omni"
+		});
+
+		coordinator.addSource(local_store);
+
+		coordinator.addStrategy(new SyncStrategy({
+			source: "memory",
+			target: "local",
+			blocking: false
+		}));
+	}
+	
+	await coordinator.activate();
 
 	// The WebSocket server, which is used for peer-to-peer communication.
 	let wss = null;
